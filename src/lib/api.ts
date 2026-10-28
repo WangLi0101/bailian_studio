@@ -162,26 +162,39 @@ export async function createVideoTask(
   settings: Settings,
   payload: VideoTaskPayload,
 ): Promise<string> {
-  const parameters: Record<string, unknown> = {
-    duration: payload.duration,
-    prompt_extend: payload.promptExtend,
-    watermark: payload.watermark,
-  };
-  if (payload.resolution) {
-    parameters.resolution = payload.resolution;
-  } else if (payload.size) {
-    parameters.size = payload.size;
+  const isV2 = payload.protocol === "v2";
+  const input: Record<string, unknown> = { prompt: payload.prompt };
+  const parameters: Record<string, unknown> = { duration: payload.duration };
+
+  if (isV2) {
+    // 新版协议（wan2.7 / wan3.0 / HappyHorse）：
+    // resolution + ratio 定义输出规格，图生视频通过 input.media 传首帧。
+    if (payload.resolution) parameters.resolution = payload.resolution;
+    if (payload.ratio) parameters.ratio = payload.ratio;
+    if (payload.supportsPromptExtend !== false) {
+      parameters.prompt_extend = payload.promptExtend;
+    }
+    parameters.watermark = payload.watermark;
+    if (payload.negativePrompt && payload.supportsNegativePrompt !== false) {
+      input.negative_prompt = payload.negativePrompt;
+    }
+    if (payload.imageUrl) {
+      input.media = [{ type: "first_frame", url: payload.imageUrl }];
+    }
+  } else {
+    // 旧版协议（wan2.5 及更早）：size / resolution 档位 + img_url 首帧。
+    if (payload.negativePrompt) input.negative_prompt = payload.negativePrompt;
+    if (payload.imageUrl) input.img_url = payload.imageUrl;
+    parameters.prompt_extend = payload.promptExtend;
+    parameters.watermark = payload.watermark;
+    if (payload.resolution) {
+      parameters.resolution = payload.resolution;
+    } else if (payload.size) {
+      parameters.size = payload.size;
+    }
   }
 
-  const body = {
-    model: payload.model,
-    input: {
-      prompt: payload.prompt,
-      ...(payload.negativePrompt ? { negative_prompt: payload.negativePrompt } : {}),
-      ...(payload.imageUrl ? { img_url: payload.imageUrl } : {}),
-    },
-    parameters,
-  };
+  const body = { model: payload.model, input, parameters };
   const response = await request(settings, VIDEO_ENDPOINT, "POST", body, {
     headers: { "X-DashScope-Async": "enable" },
   });

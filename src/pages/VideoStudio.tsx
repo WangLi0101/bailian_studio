@@ -93,15 +93,20 @@ export function VideoStudio({
   const hasKey = Boolean(settings.apiKey.trim());
   const model = getVideoModel(settings.videoModel);
   const needsImage = model.kind === "i2v";
+  const isV2 = model.protocol === "v2";
+  // All-in-One 模型（wan3.0）：首帧图片可选，留空则纯文生视频。
+  const acceptsImage = needsImage || model.allInOne === true;
+  const usesImage = acceptsImage && Boolean(imageUrl.trim());
   const isBusy = generation.isBusy;
-  const frameValid = !needsImage || isHttpUrl(imageUrl);
+  const frameValid = needsImage
+    ? isHttpUrl(imageUrl)
+    : !acceptsImage || !imageUrl.trim() || isHttpUrl(imageUrl);
   const activeUrl = lastItem?.urls[0] ?? "";
   const activeModel = getVideoModel(lastItem?.model ?? settings.videoModel);
   const maxPrompt = model.maxPrompt ?? 1500;
-  const currentSizeLabel = (
-    lastItem?.size ?? (needsImage ? resolution : size)
-  ).replace("*", " × ");
-  const selectionLabel = (needsImage ? resolution : size).replace("*", " × ");
+  const promptExtendDisabled = model.supportsPromptExtend === false;
+  const formatDuration = (value: number) =>
+    value < 0 ? "智能时长" : `${value} 秒`;
 
   // 文生视频按「清晰度 + 比例」两级选择，避免铺开一整张尺寸表。
   const sizeTiers = [
@@ -112,6 +117,14 @@ export function VideoStudio({
   const activeTier = activeSize?.hint ?? sizeTiers[0] ?? "480P";
   const tierSizes = model.sizes.filter((option) => option.hint === activeTier);
 
+  const sizeLabel = needsImage
+    ? resolution
+    : isV2
+      ? `${activeTier} ${activeSize?.label ?? ""}`.trim()
+      : size;
+  const currentSizeLabel = (lastItem?.size ?? sizeLabel).replace("*", " × ");
+  const selectionLabel = sizeLabel.replace("*", " × ");
+
   const handleTierChange = (nextTier: string) => {
     const sameRatio = model.sizes.find(
       (option) => option.hint === nextTier && option.label === activeSize?.label,
@@ -120,18 +133,47 @@ export function VideoStudio({
     if (target) setSize(target.value);
   };
 
+  // 时长选项：-1 表示智能时长（模型自动推荐合适长度）。
+  const durationOptions = (model.durations ?? [5]).map((value) => ({
+    value: String(value),
+    label: value < 0 ? "智能" : `${value} 秒`,
+  }));
+  const durationField = (
+    <div>
+      <Label>时长</Label>
+      <Segmented<string>
+        className="w-full [&>button]:flex-1"
+        ariaLabel="时长"
+        value={String(duration)}
+        onChange={(value) => setDuration(Number(value))}
+        options={durationOptions}
+      />
+    </div>
+  );
+  // wan2.5 及之后的模型默认生成有声视频。
+  const audioByDefault =
+    model.id.startsWith("wan2.5") ||
+    model.id.startsWith("wan2.7") ||
+    model.id.startsWith("wan3.0") ||
+    model.id.startsWith("happyhorse");
+
   useEffect(() => {
     if (!handoff) return;
     setImageUrl(handoff.imageUrl);
     const current = getVideoModel(settings.videoModel);
+    // wan3.0 等 All-in-One 模型无需切换，同一模型即可图生视频。
     const targetId =
-      current.kind === "i2v"
+      current.kind === "i2v" || current.allInOne
         ? settings.videoModel
-        : current.id.startsWith("wan2.5")
-          ? "wan2.5-i2v-preview"
-          : current.id.startsWith("wanx2.1")
-            ? "wanx2.1-i2v-turbo"
-            : "wan2.2-i2v-plus";
+        : current.id.startsWith("wan2.7")
+          ? "wan2.7-i2v"
+          : current.id.startsWith("happyhorse")
+            ? "happyhorse-1.1-i2v"
+            : current.id.startsWith("wan2.5")
+              ? "wan2.5-i2v-preview"
+              : current.id.startsWith("wanx2.1")
+                ? "wanx2.1-i2v-turbo"
+                : "wan2.2-i2v-plus";
     const target = getVideoModel(targetId);
     if (targetId !== settings.videoModel) {
       updateSettings({ videoModel: targetId });
@@ -185,12 +227,20 @@ export function VideoStudio({
         prompt: trimmed,
         negativePrompt: negative.trim() || undefined,
         model: usedModel,
-        size: needsImage ? undefined : size,
-        resolution: needsImage ? resolution : undefined,
+        protocol: model.protocol,
+        size: !needsImage && !isV2 ? size : undefined,
+        resolution: needsImage
+          ? resolution
+          : isV2
+            ? activeTier
+            : undefined,
+        ratio: isV2 && !usesImage ? activeSize?.token : undefined,
         duration,
-        imageUrl: needsImage ? imageUrl.trim() : undefined,
+        imageUrl: usesImage ? imageUrl.trim() : undefined,
         promptExtend: settings.promptExtend,
         watermark: settings.watermark,
+        supportsPromptExtend: model.supportsPromptExtend !== false,
+        supportsNegativePrompt: model.supportsNegativePrompt !== false,
       }),
     );
 
@@ -210,11 +260,15 @@ export function VideoStudio({
       prompt: trimmed,
       negativePrompt: negative.trim() || undefined,
       model: usedModel,
-      size: needsImage ? resolution : size,
+      size: needsImage
+        ? resolution
+        : isV2
+          ? `${activeTier} ${activeSize?.label ?? ""}`.trim()
+          : size,
       duration,
       createdAt: Date.now(),
       taskId: created.taskId,
-      inputImageUrl: needsImage ? imageUrl.trim() : undefined,
+      inputImageUrl: usesImage ? imageUrl.trim() : undefined,
     };
     setLastItem(item);
     addLibraryItem(item);
@@ -259,12 +313,17 @@ export function VideoStudio({
               <PromptIdeas ideas={VIDEO_PROMPT_IDEAS} onPick={setPrompt} />
             </div>
 
-            {needsImage && (
+            {acceptsImage && (
               <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
                     <ImagePlus className="h-3.5 w-3.5" />
                     首帧图片
+                    {model.allInOne && (
+                      <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[9px] font-medium text-ink-3">
+                        可选
+                      </span>
+                    )}
                   </span>
                   {imageUrl && (
                     <span
@@ -297,7 +356,9 @@ export function VideoStudio({
                   )}
                 </div>
                 <Hint className="mt-1.5">
-                  需要可公网访问的图片地址。也可以从图片创作结果点击「用作视频首帧」自动带入。
+                  {model.allInOne
+                    ? "留空则按纯文生视频生成；提供首帧后会以图生视频模式运行。"
+                    : "需要可公网访问的图片地址。也可以从图片创作结果点击「用作视频首帧」自动带入。"}
                 </Hint>
               </div>
             )}
@@ -330,6 +391,11 @@ export function VideoStudio({
                   style={{ minHeight: 82 }}
                   placeholder="不希望出现的内容，例如：画面抖动、变形、低质量…"
                 />
+                {model.supportsNegativePrompt === false && (
+                  <Hint className="mt-1.5">
+                    当前模型暂不支持负向提示词，填写的内容不会提交。
+                  </Hint>
+                )}
               </div>
             )}
 
@@ -353,7 +419,7 @@ export function VideoStudio({
                       : "生成视频"}
               </Button>
               <p className="mt-2 text-center text-[10px] text-ink-3">
-                {model.label} · {selectionLabel} · {duration} 秒 · 约 2–5 分钟
+                {model.label} · {selectionLabel} · {formatDuration(duration)} · 约 2–10 分钟
               </p>
             </div>
           </SectionCard>
@@ -380,6 +446,10 @@ export function VideoStudio({
                     model.kind === "i2v" ? (
                       <Chip tone="primary" className="px-1.5 py-0.5 text-[9px]">
                         图生视频
+                      </Chip>
+                    ) : model.allInOne ? (
+                      <Chip tone="primary" className="px-1.5 py-0.5 text-[9px]">
+                        文/图生视频
                       </Chip>
                     ) : (
                       <Chip className="px-1.5 py-0.5 text-[9px]">文生视频</Chip>
@@ -412,20 +482,11 @@ export function VideoStudio({
                   />
                 )}
               </div>
-              <div>
-                <Label>时长</Label>
-                <Segmented<string>
-                  className="w-full [&>button]:flex-1"
-                  ariaLabel="时长"
-                  value={String(duration)}
-                  onChange={(value) => setDuration(Number(value))}
-                  options={(model.durations ?? [5]).map((value) => ({
-                    value: String(value),
-                    label: `${value} 秒`,
-                  }))}
-                />
-              </div>
+              {durationOptions.length <= 4 && durationField}
             </div>
+            {durationOptions.length > 4 && (
+              <div className="mt-3">{durationField}</div>
+            )}
 
             {model.kind === "i2v" ? (
               <Hint className="mt-3">
@@ -446,14 +507,19 @@ export function VideoStudio({
                     }))}
                   />
                 </div>
+                {model.allInOne && usesImage && (
+                  <Hint className="mt-2">
+                    已提供首帧图片：画面比例将自动匹配首帧，比例选项不会提交。
+                  </Hint>
+                )}
               </>
             )}
 
-            {model.id.startsWith("wan2.5") && (
+            {audioByDefault && (
               <div className="mt-3 flex items-start gap-2 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2">
                 <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
                 <p className="text-[10.5px] leading-relaxed text-ink-2">
-                  Wan 2.5 系列默认生成有声视频，会根据画面自动配音，也可能产生额外费用。
+                  该模型默认生成有声视频，会根据画面自动配音台词与音效，也可能产生额外费用。
                 </p>
               </div>
             )}
@@ -462,11 +528,17 @@ export function VideoStudio({
               <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-2">
                 <Sparkles className="h-3.5 w-3.5 text-primary" />
                 提示词智能优化
+                {promptExtendDisabled && (
+                  <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[9px] font-medium text-ink-3">
+                    当前模型不支持
+                  </span>
+                )}
               </div>
               <Switch
                 checked={settings.promptExtend}
                 onChange={(checked) => updateSettings({ promptExtend: checked })}
                 label="提示词智能优化"
+                disabled={promptExtendDisabled}
               />
             </div>
 
@@ -478,7 +550,7 @@ export function VideoStudio({
             title="结果预览"
             subtitle={
               lastItem
-                ? `${activeModel.label} · ${currentSizeLabel} · ${lastItem.duration}s`
+                ? `${activeModel.label} · ${currentSizeLabel} · ${formatDuration(lastItem.duration ?? duration)}`
                 : "生成的视频会显示在这里"
             }
             icon={<Video className="h-[18px] w-[18px]" />}
@@ -510,8 +582,8 @@ export function VideoStudio({
                       Wan 视频生成
                     </Chip>
                     <Chip>{needsImage ? "图生视频" : "文生视频"}</Chip>
-                    <Chip>{duration} 秒</Chip>
-                    <Chip>约 2–5 分钟</Chip>
+                    <Chip>{formatDuration(duration)}</Chip>
+                    <Chip>约 2–10 分钟</Chip>
                   </div>
                   <button
                     type="button"
@@ -606,7 +678,7 @@ export function VideoStudio({
                   />
                   <span className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[10px] font-semibold text-white/85 backdrop-blur-md">
                     <Film className="h-3 w-3" />
-                    {lastItem.duration ?? duration}s · {currentSizeLabel}
+                    {formatDuration(lastItem.duration ?? duration)} · {currentSizeLabel}
                   </span>
                 </div>
 
@@ -662,7 +734,7 @@ export function VideoStudio({
                   <span>·</span>
                   <span>{currentSizeLabel}</span>
                   <span>·</span>
-                  <span>{lastItem.duration ?? duration} 秒</span>
+                  <span>{formatDuration(lastItem.duration ?? duration)}</span>
                   <span>·</span>
                   <span>耗时 {generation.elapsed} 秒</span>
                   <span>·</span>

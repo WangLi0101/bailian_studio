@@ -70,6 +70,48 @@ function videoSizes(
 export type VideoResolution = "480P" | "720P" | "1080P";
 
 /* -------------------------------------------------------------------------- */
+/*                          新版协议（wan2.7+）尺寸                            */
+/* -------------------------------------------------------------------------- */
+
+interface V2Ratio {
+  /** 界面显示文案。 */
+  label: string;
+  /** 提交给 API 的 ratio 取值。 */
+  token: string;
+  ratio: number;
+}
+
+const V2_RATIOS_COMMON: V2Ratio[] = [
+  { label: "16:9", token: "16:9", ratio: 16 / 9 },
+  { label: "9:16", token: "9:16", ratio: 9 / 16 },
+  { label: "1:1", token: "1:1", ratio: 1 },
+  { label: "4:3", token: "4:3", ratio: 4 / 3 },
+  { label: "3:4", token: "3:4", ratio: 3 / 4 },
+];
+
+/** wan3.0 支持 adaptive（跟随输入素材）与 21:9。 */
+const V2_RATIOS_WAN3: V2Ratio[] = [
+  { label: "自适应", token: "adaptive", ratio: 16 / 9 },
+  ...V2_RATIOS_COMMON,
+];
+
+/** 新版协议模型的两级尺寸选项：清晰度档位 + 宽高比。 */
+function v2VideoSizes(
+  tiers: Array<"480P" | "720P" | "1080P">,
+  ratios: V2Ratio[] = V2_RATIOS_COMMON,
+): SizeOption[] {
+  return tiers.flatMap((tier) =>
+    ratios.map((preset) => ({
+      value: `${tier}:${preset.token}`,
+      label: preset.label,
+      token: preset.token,
+      ratio: preset.ratio,
+      hint: tier,
+    })),
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                  模型清单                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -116,31 +158,84 @@ export const IMAGE_MODELS: ModelOption[] = [
 
 export const VIDEO_MODELS: ModelOption[] = [
   {
-    id: "wan2.2-t2v-plus",
-    label: "Wan 2.2 T2V Plus",
-    desc: "文生视频 · 电影级运镜与画面稳定性",
+    id: "wan3.0-video",
+    label: "Wan 3.0 Video",
+    desc: "全能旗舰 · 最长 30 秒有声视频，文生/图生视频一体，支持智能时长",
     tag: "推荐",
     kind: "t2v",
-    sizes: videoSizes(["480P", "1080P"]),
-    durations: [5],
-    maxPrompt: 800,
+    protocol: "v2",
+    allInOne: true,
+    supportsNegativePrompt: false,
+    sizes: v2VideoSizes(["480P", "720P", "1080P"], V2_RATIOS_WAN3),
+    durations: [5, 10, 15, 20, 30, -1],
+    maxPrompt: 10000,
   },
   {
-    id: "wan2.2-i2v-plus",
-    label: "Wan 2.2 I2V Plus",
-    desc: "图生视频 · 让首帧画面自然动起来",
-    tag: "图生视频",
+    id: "wan3.0-video-prime",
+    label: "Wan 3.0 Video Prime",
+    desc: "Wan 3.0 优速版 · 同样支持 30 秒长视频，生成速度大幅提升",
+    tag: "优速",
+    kind: "t2v",
+    protocol: "v2",
+    allInOne: true,
+    supportsNegativePrompt: false,
+    sizes: v2VideoSizes(["480P", "720P", "1080P"], V2_RATIOS_WAN3),
+    durations: [5, 10, 15, 20, 30, -1],
+    maxPrompt: 10000,
+  },
+  {
+    id: "wan2.7-t2v",
+    label: "Wan 2.7 T2V",
+    desc: "文生视频 · 音频同步与多镜头叙事，最长 15 秒",
+    tag: "新",
+    kind: "t2v",
+    protocol: "v2",
+    sizes: v2VideoSizes(["720P", "1080P"]),
+    durations: [5, 10, 15],
+    maxPrompt: 5000,
+  },
+  {
+    id: "wan2.7-i2v",
+    label: "Wan 2.7 I2V",
+    desc: "图生视频 · 首帧/首尾帧/视频续写，最长 15 秒",
+    tag: "新",
     kind: "i2v",
+    protocol: "v2",
     sizes: [],
-    resolutions: ["480P", "1080P"],
-    durations: [5],
-    maxPrompt: 800,
+    resolutions: ["720P", "1080P"],
+    durations: [5, 10, 15],
+    maxPrompt: 5000,
+  },
+  {
+    id: "happyhorse-1.1-t2v",
+    label: "HappyHorse 1.1 T2V",
+    desc: "文生视频 · 物理真实的画面与运镜，最长 15 秒有声视频",
+    kind: "t2v",
+    protocol: "v2",
+    supportsPromptExtend: false,
+    supportsNegativePrompt: false,
+    sizes: v2VideoSizes(["480P", "720P", "1080P"]),
+    durations: [5, 10, 15],
+    maxPrompt: 2500,
+  },
+  {
+    id: "happyhorse-1.1-i2v",
+    label: "HappyHorse 1.1 I2V",
+    desc: "图生视频 · 首帧驱动动态画面，最长 15 秒有声视频",
+    kind: "i2v",
+    protocol: "v2",
+    supportsPromptExtend: false,
+    supportsNegativePrompt: false,
+    sizes: [],
+    resolutions: ["480P", "720P", "1080P"],
+    durations: [5, 10, 15],
+    maxPrompt: 2500,
   },
   {
     id: "wan2.5-t2v-preview",
     label: "Wan 2.5 T2V Preview",
-    desc: "最新旗舰 · 支持 10 秒长镜头与自动配音",
-    tag: "新",
+    desc: "上一代旗舰 · 支持 10 秒长镜头与自动配音",
+    tag: "经典",
     kind: "t2v",
     sizes: videoSizes(["480P", "720P", "1080P"]),
     durations: [5, 10],
@@ -149,13 +244,32 @@ export const VIDEO_MODELS: ModelOption[] = [
   {
     id: "wan2.5-i2v-preview",
     label: "Wan 2.5 I2V Preview",
-    desc: "最新图生视频 · 支持 10 秒与自动配音",
-    tag: "新",
+    desc: "上一代图生视频 · 支持 10 秒与自动配音",
     kind: "i2v",
     sizes: [],
     resolutions: ["480P", "720P", "1080P"],
     durations: [5, 10],
     maxPrompt: 1500,
+  },
+  {
+    id: "wan2.2-t2v-plus",
+    label: "Wan 2.2 T2V Plus",
+    desc: "文生视频 · 电影级运镜与画面稳定性（最长 5 秒）",
+    kind: "t2v",
+    sizes: videoSizes(["480P", "1080P"]),
+    durations: [5],
+    maxPrompt: 800,
+  },
+  {
+    id: "wan2.2-i2v-plus",
+    label: "Wan 2.2 I2V Plus",
+    desc: "图生视频 · 让首帧画面自然动起来（最长 5 秒）",
+    tag: "图生视频",
+    kind: "i2v",
+    sizes: [],
+    resolutions: ["480P", "1080P"],
+    durations: [5],
+    maxPrompt: 800,
   },
   {
     id: "wanx2.1-t2v-turbo",
@@ -290,11 +404,31 @@ function toImageOption(model: CustomModel): ModelOption {
 
 function toVideoOption(model: CustomModel): ModelOption {
   const kind = model.kind === "i2v" ? "i2v" : "t2v";
+  const protocol = model.protocol === "v2" ? ("v2" as const) : ("legacy" as const);
   const durations = (model.durations ?? []).filter(
     (value) => Number.isFinite(value) && value > 0,
   );
   const sizes = parseCustomSizeOptions(model.sizes, true);
   const resolutions = parseCustomResolutions(model.resolutions);
+
+  if (protocol === "v2") {
+    // 新版协议：清晰度档位 + 常用宽高比，图生视频比例跟随首帧。
+    const tiers: VideoResolution[] = resolutions.length
+      ? resolutions
+      : ["480P", "720P", "1080P"];
+    return {
+      id: model.id,
+      label: model.label,
+      desc: model.desc?.trim() || CUSTOM_MODEL_DESC,
+      tag: "自定义",
+      kind,
+      protocol: "v2",
+      sizes: kind === "i2v" ? [] : v2VideoSizes(tiers),
+      ...(kind === "i2v" ? { resolutions: tiers } : {}),
+      durations: durations.length ? durations : [5],
+      maxPrompt: model.maxPrompt ?? 1500,
+    };
+  }
 
   return {
     id: model.id,

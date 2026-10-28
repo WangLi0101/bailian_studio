@@ -35,6 +35,7 @@ interface Draft {
   label: string;
   category: CustomModelCategory;
   kind: "t2v" | "i2v";
+  protocol: "legacy" | "v2";
   desc: string;
   sizes: string;
   resolutions: string;
@@ -47,6 +48,7 @@ const EMPTY_DRAFT: Draft = {
   label: "",
   category: "image",
   kind: "t2v",
+  protocol: "legacy",
   desc: "",
   sizes: "",
   resolutions: "",
@@ -71,6 +73,7 @@ function draftFromModel(model: CustomModel): Draft {
     label: model.label,
     category: model.category,
     kind: model.kind ?? "t2v",
+    protocol: model.protocol === "v2" ? "v2" : "legacy",
     desc: model.desc ?? "",
     sizes: (model.sizes ?? []).join(", "),
     resolutions: (model.resolutions ?? []).join(", "),
@@ -174,7 +177,8 @@ export function CustomModelManager() {
       ...(draft.category === "video"
         ? {
             kind: draft.kind,
-            ...(draft.kind === "i2v"
+            protocol: draft.protocol,
+            ...(draft.kind === "i2v" || draft.protocol === "v2"
               ? { resolutions: resolutions.length ? resolutions : undefined }
               : { sizes: sizes.length ? sizes : undefined }),
             durations: durations.length ? [...new Set(durations)] : undefined,
@@ -300,6 +304,9 @@ export function CustomModelManager() {
                           : "文生视频"
                         : "文生图"}
                     </Chip>
+                    {model.protocol === "v2" && (
+                      <Chip className="px-1.5 py-0.5 text-[9px]">新版协议</Chip>
+                    )}
                   </div>
                   <p
                     className="mt-0.5 truncate font-mono text-[10px] text-ink-3"
@@ -424,6 +431,26 @@ export function CustomModelManager() {
             )}
           </div>
 
+          {draft.category === "video" && (
+            <div className="mt-3">
+              <Label>接口协议</Label>
+              <Segmented<"legacy" | "v2">
+                className="w-full [&>button]:flex-1"
+                ariaLabel="接口协议"
+                value={draft.protocol}
+                onChange={(value) => patchDraft({ protocol: value })}
+                options={[
+                  { value: "legacy", label: "旧版" },
+                  { value: "v2", label: "新版" },
+                ]}
+              />
+              <Hint className="mt-1.5">
+                wan2.7 / wan3.0 / HappyHorse 等新模型请选「新版」（清晰度 + 比例传参）；
+                wan2.5 及更早模型选「旧版」（像素尺寸传参）。
+              </Hint>
+            </div>
+          )}
+
           <div className="mt-3">
             <Label>模型描述（可选）</Label>
             <TextInput
@@ -434,7 +461,8 @@ export function CustomModelManager() {
             />
           </div>
 
-          {draft.category === "video" && draft.kind === "i2v" ? (
+          {draft.category === "video" &&
+          (draft.kind === "i2v" || draft.protocol === "v2") ? (
             <div className="mt-3">
               <Label>清晰度档位（可选）</Label>
               <TextInput
@@ -447,7 +475,9 @@ export function CustomModelManager() {
                 aria-label="自定义模型清晰度"
               />
               <Hint className="mt-1.5">
-                留空则使用全部三档；画面比例跟随首帧图片。
+                {draft.protocol === "v2"
+                  ? "留空则使用全部三档；新版协议下文生视频提供常用比例选择，图生视频比例跟随首帧。"
+                  : "留空则使用全部三档；画面比例跟随首帧图片。"}
               </Hint>
             </div>
           ) : (

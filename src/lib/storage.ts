@@ -23,7 +23,7 @@ export const defaultSettings: Settings = {
   baseUrl: DEFAULT_BASE_URL,
   apiKey: "",
   imageModel: "wan2.2-t2i-flash",
-  videoModel: "wan2.2-t2v-plus",
+  videoModel: "wan3.0-video",
   customModels: [],
   promptExtend: true,
   watermark: false,
@@ -111,6 +111,9 @@ function parseCustomModels(value: unknown): CustomModel[] {
       category,
       ...(category === "video"
         ? { kind: record.kind === "i2v" ? ("i2v" as const) : ("t2v" as const) }
+        : {}),
+      ...(category === "video" && record.protocol === "v2"
+        ? { protocol: "v2" as const }
         : {}),
       ...(typeof record.desc === "string" && record.desc.trim()
         ? { desc: record.desc.trim() }

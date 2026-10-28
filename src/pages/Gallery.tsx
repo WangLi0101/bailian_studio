@@ -255,7 +255,7 @@ export function Gallery({
 
                     {isVideo && item.duration && (
                       <span className="pointer-events-none absolute bottom-2.5 right-2.5 z-20 rounded-md bg-black/55 px-1.5 py-0.5 text-[9.5px] font-semibold text-white/90">
-                        {item.duration}s
+                        {item.duration < 0 ? "智能时长" : `${item.duration}s`}
                       </span>
                     )}
 

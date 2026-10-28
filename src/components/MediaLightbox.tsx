@@ -153,7 +153,12 @@ export function MediaLightbox({
           <div className="mt-4 grid grid-cols-2 gap-2">
             <Meta label="模型" value={modelLabel} />
             {item.size && <Meta label="尺寸" value={item.size.replace("*", " × ")} />}
-            {item.duration && <Meta label="时长" value={`${item.duration} 秒`} />}
+            {item.duration && (
+              <Meta
+                label="时长"
+                value={item.duration < 0 ? "智能时长" : `${item.duration} 秒`}
+              />
+            )}
             <Meta
               label={isVideo ? "类型" : "数量"}
               value={isVideo ? "AI 视频" : "AI 图片"}

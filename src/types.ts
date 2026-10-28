@@ -32,6 +32,8 @@ export interface CustomModel {
   category: CustomModelCategory;
   /** 仅视频模型有效：文生视频 / 图生视频。 */
   kind?: "t2v" | "i2v";
+  /** 视频模型接口协议：旧版（size / img_url）或新版（resolution / ratio / media）。 */
+  protocol?: "legacy" | "v2";
   desc?: string;
   /** 图片尺寸或文生视频像素尺寸，如 1024*1024。 */
   sizes?: string[];
@@ -60,6 +62,8 @@ export interface SizeOption {
   label: string;
   ratio: number;
   hint?: string;
+  /** 提交给 API 的宽高比取值（新版协议模型使用，如 "16:9"、"adaptive"）。 */
+  token?: string;
 }
 
 export interface ModelOption {
@@ -68,6 +72,14 @@ export interface ModelOption {
   desc: string;
   tag?: string;
   kind?: "t2v" | "i2v";
+  /** 新版协议（wan2.7 / wan3.0 / HappyHorse）：resolution + ratio 与 media 传参。 */
+  protocol?: "legacy" | "v2";
+  /** All-in-One 模型（wan3.0）：文生/图生视频共用一个模型 ID，首帧图片可选。 */
+  allInOne?: boolean;
+  /** 是否支持 prompt_extend 参数（HappyHorse 不支持）。 */
+  supportsPromptExtend?: boolean;
+  /** 是否支持 negative_prompt 参数（wan3.0 / HappyHorse 不支持）。 */
+  supportsNegativePrompt?: boolean;
   sizes: SizeOption[];
   /** 图生视频使用的分辨率档位（480P / 720P / 1080P）。 */
   resolutions?: string[];
@@ -101,14 +113,22 @@ export interface VideoTaskPayload {
   prompt: string;
   negativePrompt?: string;
   model: string;
-  /** 文生视频的像素尺寸，如 1280*720。 */
+  /** 文生视频的像素尺寸（旧版协议），如 1280*720。 */
   size?: string;
-  /** 图生视频的分辨率档位，如 720P。 */
+  /** 图生视频的分辨率档位（旧版协议）；新版协议下文生视频也传档位。 */
   resolution?: string;
+  /** 新版协议的宽高比，如 16:9 / adaptive。 */
+  ratio?: string;
+  /** 接口协议：旧版（size / img_url）或新版（resolution / ratio / media）。 */
+  protocol?: "legacy" | "v2";
   duration: number;
   imageUrl?: string;
   promptExtend: boolean;
   watermark: boolean;
+  /** 新版协议下模型是否支持 prompt_extend。 */
+  supportsPromptExtend?: boolean;
+  /** 新版协议下模型是否支持 negative_prompt。 */
+  supportsNegativePrompt?: boolean;
 }
 
 export interface ToastAction {
