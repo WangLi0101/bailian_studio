@@ -32,6 +32,7 @@ export function Gallery({
 }) {
   const {
     library,
+    addLibraryItem,
     removeLibraryItem,
     clearLibrary,
     notify,
@@ -42,7 +43,6 @@ export function Gallery({
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [lightboxItem, setLightboxItem] = useState<LibraryItem | null>(null);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
   const counts = useMemo(
@@ -67,18 +67,13 @@ export function Gallery({
     item.kind === "image" ? getImageModel(item.model).label : getVideoModel(item.model).label;
 
   const handleDelete = (item: LibraryItem) => {
-    if (confirmId !== item.id) {
-      setConfirmId(item.id);
-      window.setTimeout(
-        () => setConfirmId((current) => (current === item.id ? null : current)),
-        3200,
-      );
-      return;
-    }
     removeLibraryItem(item.id);
-    setConfirmId(null);
     if (lightboxItem?.id === item.id) setLightboxItem(null);
-    notify("已从作品库移除", { severity: "info", duration: 2400 });
+    notify("已从作品库移除", {
+      severity: "info",
+      duration: 6000,
+      action: { label: "撤销", onClick: () => addLibraryItem(item) },
+    });
   };
 
   const handleClear = () => {
@@ -183,7 +178,6 @@ export function Gallery({
             {filtered.map((item) => {
               const isVideo = item.kind === "video";
               const downloading = downloadingUrl === item.urls[0];
-              const deleting = confirmId === item.id;
               return (
                 <article
                   key={item.id}
@@ -240,14 +234,10 @@ export function Gallery({
                       </button>
                       <button
                         type="button"
-                        aria-label={deleting ? "确认删除" : "删除"}
-                        title={deleting ? "再次点击确认删除" : "从作品库移除"}
+                        aria-label="删除"
+                        title="从作品库移除"
                         onClick={() => handleDelete(item)}
-                        className={
-                          deleting
-                            ? "grid h-8 w-8 cursor-pointer place-items-center rounded-lg bg-danger text-white shadow-md"
-                            : "grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-white/20 bg-black/40 text-white backdrop-blur-md transition-colors hover:bg-danger/80"
-                        }
+                        className="grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-white/20 bg-black/40 text-white backdrop-blur-md transition-colors hover:bg-danger/80"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>

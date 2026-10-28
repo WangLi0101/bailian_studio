@@ -76,10 +76,13 @@ export function ImageStudio({
   const snapshot = generation.snapshot;
   const urls = snapshot?.urls ?? [];
   const activeUrl = urls[selectedIndex] ?? urls[0] ?? "";
-  // 刷新后恢复展示：lastItem 丢失时用任务元信息 + 快照重建展示条目。
+  // 刷新后恢复展示：优先复用已入库的条目（保证 id 一致，删除/撤销才能命中库内记录），
+  // 未入库时再用任务元信息 + 快照重建。
   const restoredItem =
     snapshot && generation.meta
-      ? buildLibraryItem("image", generation.meta, snapshot)
+      ? (library.find(
+          (item) => item.kind === "image" && item.taskId === snapshot.taskId,
+        ) ?? buildLibraryItem("image", generation.meta, snapshot))
       : null;
   const resultItem = lastItem ?? restoredItem;
   const activeModel = getImageModel(resultItem?.model ?? settings.imageModel);

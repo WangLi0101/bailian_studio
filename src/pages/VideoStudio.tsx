@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ChevronDown,
@@ -15,7 +15,9 @@ import {
   SlidersHorizontal,
   Sparkles,
   Timer,
+  Upload,
   Video,
+  X,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { buildLibraryItem, useGeneration } from "../hooks/useGeneration";
@@ -50,6 +52,62 @@ import {
 import { cn } from "../lib/cn";
 
 const isHttpUrl = (value: string) => /^https?:\/\/\S+$/i.test(value.trim());
+
+/** 百炼图生视频接口支持 data:image/...;base64,... 形式的本地图片。 */
+const isDataImageUrl = (value: string) =>
+  /^data:image\/(?:png|jpe?g|bmp|webp);base64,[a-z0-9+/=]+$/i.test(value.trim());
+
+const isFrameRef = (value: string) => isHttpUrl(value) || isDataImageUrl(value);
+
+/** 接口限制文件不超过 20MB；Base64 编码约膨胀 1/3，原始文件预留 15MB。 */
+const MAX_FRAME_FILE_BYTES = 15 * 1024 * 1024;
+const FRAME_FILE_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
+
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("文件读取失败，请重试"));
+    };
+    reader.onerror = () => reject(new Error("文件读取失败，请重试"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片解析失败，文件可能已损坏"));
+    image.src = src;
+  });
+}
+
+/**
+ * 为本地图片生成小尺寸缩略图，用于预览与作品库持久化：
+ * 完整 Base64 动辄数 MB，直接写入 localStorage 会挤爆存储配额。
+ */
+async function shrinkForDisplay(dataUrl: string): Promise<string> {
+  try {
+    const image = await loadImageElement(dataUrl);
+    const scale = Math.min(1, 480 / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return dataUrl;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return dataUrl;
+  }
+}
 
 const formatElapsed = (seconds: number) =>
   seconds < 60
@@ -91,6 +149,10 @@ export function VideoStudio({
   );
   const [duration, setDuration] = useState(5);
   const [imageUrl, setImageUrl] = useState("");
+  const [frameFile, setFrameFile] = useState<{ name: string; size: number } | null>(
+    null,
+  );
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [lastItem, setLastItem] = useState<LibraryItem | null>(null);
   const [lightboxItem, setLightboxItem] = useState<LibraryItem | null>(null);
@@ -102,15 +164,19 @@ export function VideoStudio({
   // All-in-One 模型（wan3.0）：首帧图片可选，留空则纯文生视频。
   const acceptsImage = needsImage || model.allInOne === true;
   const usesImage = acceptsImage && Boolean(imageUrl.trim());
+  const isLocalFrame = isDataImageUrl(imageUrl);
   const isBusy = generation.isBusy;
   const frameValid = needsImage
-    ? isHttpUrl(imageUrl)
-    : !acceptsImage || !imageUrl.trim() || isHttpUrl(imageUrl);
+    ? isFrameRef(imageUrl)
+    : !acceptsImage || !imageUrl.trim() || isFrameRef(imageUrl);
   const snapshot = generation.snapshot;
-  // 刷新后恢复展示：lastItem 丢失时用任务元信息 + 快照重建展示条目。
+  // 刷新后恢复展示：优先复用已入库的条目（保证 id 一致，删除/撤销才能命中库内记录），
+  // 未入库时再用任务元信息 + 快照重建。
   const restoredItem =
     snapshot && generation.meta
-      ? buildLibraryItem("video", generation.meta, snapshot)
+      ? (library.find(
+          (item) => item.kind === "video" && item.taskId === snapshot.taskId,
+        ) ?? buildLibraryItem("video", generation.meta, snapshot))
       : null;
   const resultItem = lastItem ?? restoredItem;
   const activeUrl = resultItem?.urls[0] ?? "";
@@ -172,6 +238,7 @@ export function VideoStudio({
   useEffect(() => {
     if (!handoff) return;
     setImageUrl(handoff.imageUrl);
+    setFrameFile(null);
     const current = getVideoModel(settings.videoModel);
     // wan3.0 等 All-in-One 模型无需切换，同一模型即可图生视频。
     const targetId =
@@ -222,6 +289,43 @@ export function VideoStudio({
     );
   }, [settings.videoModel, getVideoModel]);
 
+  const handleFrameFile = async (file: File | undefined) => {
+    if (!file) return;
+    const typeOk =
+      FRAME_FILE_TYPES.includes(file.type) ||
+      /\.(jpe?g|png|bmp|webp)$/i.test(file.name);
+    if (!typeOk) {
+      notify("首帧图片仅支持 JPEG、PNG、BMP、WEBP 格式", { severity: "error" });
+      return;
+    }
+    if (file.size > MAX_FRAME_FILE_BYTES) {
+      notify("首帧图片不能超过 15MB，请压缩后重试", { severity: "error" });
+      return;
+    }
+    try {
+      const dataUrl = await readAsDataUrl(file);
+      // 接口限制：宽高 240–8000 像素，宽高比 1:8 ～ 8:1。
+      const { width, height } = await loadImageElement(dataUrl);
+      const sideOk =
+        width >= 240 && width <= 8000 && height >= 240 && height <= 8000;
+      const ratioOk = width / height <= 8 && height / width <= 8;
+      if (!sideOk || !ratioOk) {
+        notify(
+          "首帧图片需满足：宽高 240–8000 像素，宽高比 1:8 ～ 8:1",
+          { severity: "error" },
+        );
+        return;
+      }
+      setFrameFile({ name: file.name, size: file.size });
+      setImageUrl(dataUrl);
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "图片读取失败，请重试",
+        { severity: "error" },
+      );
+    }
+  };
+
   const handleGenerate = async () => {
     if (!hasKey) {
       onOpenSettings();
@@ -234,6 +338,13 @@ export function VideoStudio({
     const usedModel = settings.videoModel;
     setLastItem(null);
 
+    const submittedFrame = usesImage ? imageUrl.trim() : undefined;
+    // 本地 Base64 体积大，作品库 / 待恢复任务里只存缩略图，避免挤爆 localStorage。
+    const persistedFrame =
+      submittedFrame && isDataImageUrl(submittedFrame)
+        ? await shrinkForDisplay(submittedFrame)
+        : submittedFrame;
+
     const created = await generation.submit(
       {
         prompt: trimmed,
@@ -245,7 +356,7 @@ export function VideoStudio({
             ? `${activeTier} ${activeSize?.label ?? ""}`.trim()
             : size,
         duration,
-        inputImageUrl: usesImage ? imageUrl.trim() : undefined,
+        inputImageUrl: persistedFrame,
       },
       () =>
         createVideoTask(settings, {
@@ -261,7 +372,7 @@ export function VideoStudio({
             : undefined,
         ratio: isV2 && !usesImage ? activeSize?.token : undefined,
         duration,
-        imageUrl: usesImage ? imageUrl.trim() : undefined,
+        imageUrl: submittedFrame,
         promptExtend: settings.promptExtend,
         watermark: settings.watermark,
         supportsPromptExtend: model.supportsPromptExtend !== false,
@@ -293,7 +404,7 @@ export function VideoStudio({
       duration,
       createdAt: Date.now(),
       taskId: created.taskId,
-      inputImageUrl: usesImage ? imageUrl.trim() : undefined,
+      inputImageUrl: persistedFrame,
     };
     setLastItem(item);
     addLibraryItem(item);
@@ -357,33 +468,93 @@ export function VideoStudio({
                         frameValid ? "text-success" : "text-danger",
                       )}
                     >
-                      {frameValid ? "格式有效" : "请输入 http(s) 图片地址"}
+                      {frameValid ? "格式有效" : "请粘贴 http(s) 地址或上传本地图片"}
                     </span>
                   )}
                 </div>
                 <div className="flex items-stretch gap-2">
-                  <TextInput
-                    value={imageUrl}
-                    onChange={(event) => setImageUrl(event.target.value)}
-                    leading={<Link2 className="h-4 w-4" />}
-                    placeholder="https://your-oss-bucket/frame.jpg"
-                    containerClassName="flex-1"
-                    aria-label="首帧图片地址"
-                  />
-                  {imageUrl && frameValid && (
-                    <div className="h-11 w-[72px] shrink-0 overflow-hidden rounded-xl border border-line bg-surface-1">
-                      <SmartImage
-                        src={imageUrl}
-                        alt="首帧预览"
-                        className="h-full w-full"
+                  {isLocalFrame ? (
+                    <>
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-line bg-surface-1 px-2.5 py-2">
+                        <div className="h-11 w-[72px] shrink-0 overflow-hidden rounded-lg border border-line bg-surface-2">
+                          <SmartImage
+                            src={imageUrl}
+                            alt="首帧预览"
+                            className="h-full w-full"
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[11.5px] font-semibold text-ink">
+                            {frameFile?.name ?? "粘贴的 Base64 图片"}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-ink-3">
+                            {frameFile
+                              ? `${formatBytes(frameFile.size)} · 已转为 Base64，提交时直接上传`
+                              : "Base64 图片数据，提交时直接上传"}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setImageUrl("");
+                          setFrameFile(null);
+                        }}
+                        icon={<X className="h-4 w-4" />}
+                        aria-label="移除本地图片"
+                      >
+                        移除
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <TextInput
+                        value={imageUrl}
+                        onChange={(event) => {
+                          setImageUrl(event.target.value);
+                          setFrameFile(null);
+                        }}
+                        leading={<Link2 className="h-4 w-4" />}
+                        placeholder="https://your-oss-bucket/frame.jpg"
+                        containerClassName="flex-1"
+                        aria-label="首帧图片地址"
                       />
-                    </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => fileRef.current?.click()}
+                        icon={<Upload className="h-4 w-4" />}
+                        title="上传本地图片"
+                        aria-label="上传本地图片"
+                      >
+                        上传
+                      </Button>
+                      {imageUrl && frameValid && (
+                        <div className="h-11 w-[72px] shrink-0 overflow-hidden rounded-xl border border-line bg-surface-1">
+                          <SmartImage
+                            src={imageUrl}
+                            alt="首帧预览"
+                            className="h-full w-full"
+                          />
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/jpeg,image/jpg,image/png,image/bmp,image/webp"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleFrameFile(event.target.files?.[0]);
+                    // 允许移除后再次选择同一文件。
+                    event.target.value = "";
+                  }}
+                />
                 <Hint className="mt-1.5">
                   {model.allInOne
                     ? "留空则按纯文生视频生成；提供首帧后会以图生视频模式运行。"
-                    : "需要可公网访问的图片地址。也可以从图片创作结果点击「用作视频首帧」自动带入。"}
+                    : "支持公网图片地址或上传本地图片（JPEG/PNG/BMP/WEBP，≤15MB）。也可以从图片创作结果点击「用作视频首帧」自动带入。"}
                 </Hint>
               </div>
             )}
@@ -440,7 +611,7 @@ export function VideoStudio({
                   : isBusy
                     ? "正在生成…"
                     : needsImage && !imageUrl.trim()
-                      ? "填写首帧后开始"
+                      ? "填写或上传首帧后开始"
                       : "生成视频"}
               </Button>
               <p className="mt-2 text-center text-[10px] text-ink-3">

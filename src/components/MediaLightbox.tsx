@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
   Copy,
@@ -26,14 +26,10 @@ export function MediaLightbox({
   onClose: () => void;
   onUseAsFrame?: (item: LibraryItem) => void;
 }) {
-  const { removeLibraryItem, notify, getImageModel, getVideoModel } = useApp();
+  const { addLibraryItem, removeLibraryItem, notify, getImageModel, getVideoModel } =
+    useApp();
   const { download, openOriginal, downloadingUrl } = useMediaActions();
   const copyPrompt = useCopyPrompt();
-  const [confirming, setConfirming] = useState(false);
-
-  useEffect(() => {
-    setConfirming(false);
-  }, [item?.id]);
 
   useEffect(() => {
     if (!item) return;
@@ -214,23 +210,18 @@ export function MediaLightbox({
             <button
               type="button"
               onClick={() => {
-                if (!confirming) {
-                  setConfirming(true);
-                  window.setTimeout(() => setConfirming(false), 3000);
-                  return;
-                }
                 removeLibraryItem(item.id);
-                notify("已从作品库移除", { severity: "info", duration: 2400 });
+                notify("已从作品库移除", {
+                  severity: "info",
+                  duration: 6000,
+                  action: { label: "撤销", onClick: () => addLibraryItem(item) },
+                });
                 onClose();
               }}
-              className={
-                confirming
-                  ? "mt-1 flex h-9 items-center justify-center gap-1.5 rounded-xl bg-danger/12 text-[11.5px] font-semibold text-danger"
-                  : "mt-1 flex h-9 items-center justify-center gap-1.5 rounded-xl text-[11.5px] font-semibold text-ink-3 transition-colors hover:bg-danger/8 hover:text-danger"
-              }
+              className="mt-1 flex h-9 items-center justify-center gap-1.5 rounded-xl text-[11.5px] font-semibold text-ink-3 transition-colors hover:bg-danger/8 hover:text-danger"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              {confirming ? "再次点击确认移除" : "从作品库移除"}
+              从作品库移除
             </button>
           </div>
 
