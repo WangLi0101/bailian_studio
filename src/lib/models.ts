@@ -112,6 +112,30 @@ function v2VideoSizes(
 }
 
 /* -------------------------------------------------------------------------- */
+/*                              图像编辑功能                                    */
+/* -------------------------------------------------------------------------- */
+
+/** wanx2.1-imageedit 的 input.function 取值（图生图核心能力）。 */
+export const IMAGE_EDIT_FUNCTIONS: Array<{ value: string; label: string }> = [
+  { value: "description_edit", label: "指令编辑" },
+  { value: "stylization_all", label: "全图风格化" },
+  { value: "stylization_scene", label: "背景风格化" },
+  { value: "stylization_subject", label: "主体风格化" },
+  { value: "image_outpainting", label: "描述扩图" },
+  { value: "color_edit", label: "颜色编辑" },
+  { value: "remove_watermark", label: "去水印" },
+  { value: "expand_figure", label: "头像裁剪" },
+  { value: "face_changing", label: "人脸替换" },
+  { value: "makeup_transfer", label: "妆容迁移" },
+];
+
+export const IMAGE_EDIT_PROMPT_IDEAS = [
+  "把画面改成黄昏时分，暖金色光线洒在建筑上，保留原有构图",
+  "将背景替换为樱花盛开的街道，虚化景深，主体保持不变",
+  "整体转为日系水彩插画风格，柔和高饱和色彩",
+];
+
+/* -------------------------------------------------------------------------- */
 /*                                  模型清单                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -152,6 +176,16 @@ export const IMAGE_MODELS: ModelOption[] = [
     label: "Wan 2.1 Plus",
     desc: "均衡画质与速度，细节丰富",
     sizes: IMAGE_SIZES,
+    maxPrompt: 500,
+  },
+  {
+    id: "wanx2.1-imageedit",
+    label: "Wan 2.1 图像编辑",
+    desc: "图生图 · 上传原图 + 文字指令，改背景、换风格、扩图、调色",
+    tag: "图生图",
+    kind: "i2i",
+    editFunctions: IMAGE_EDIT_FUNCTIONS,
+    sizes: [],
     maxPrompt: 500,
   },
 ];
@@ -391,13 +425,15 @@ function parseCustomResolutions(values: string[] | undefined): VideoResolution[]
 }
 
 function toImageOption(model: CustomModel): ModelOption {
-  const sizes = parseCustomSizeOptions(model.sizes, false);
+  const isEdit = model.kind === "i2i";
+  const sizes = isEdit ? [] : parseCustomSizeOptions(model.sizes, false);
   return {
     id: model.id,
     label: model.label,
     desc: model.desc?.trim() || CUSTOM_MODEL_DESC,
     tag: "自定义",
-    sizes: sizes.length ? sizes : IMAGE_SIZES,
+    ...(isEdit ? { kind: "i2i" as const, editFunctions: IMAGE_EDIT_FUNCTIONS } : {}),
+    sizes: isEdit ? [] : sizes.length ? sizes : IMAGE_SIZES,
     maxPrompt: model.maxPrompt ?? 1500,
   };
 }
@@ -470,9 +506,16 @@ export function findVideoModel(models: ModelOption[], id: string): ModelOption {
 }
 
 export function clampImageSize(model: ModelOption, size: string): string {
+  if (model.sizes.length === 0) return "";
   return model.sizes.some((item) => item.value === size)
     ? size
     : model.sizes[0].value;
+}
+
+/** 图生图模型的编辑功能保底值：默认「指令编辑」。 */
+export function clampImageEditFunction(model: ModelOption, fn: string): string {
+  const list = model.editFunctions ?? IMAGE_EDIT_FUNCTIONS;
+  return list.some((item) => item.value === fn) ? fn : list[0].value;
 }
 
 export function clampVideoSize(model: ModelOption, size: string): string {

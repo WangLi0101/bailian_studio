@@ -14,6 +14,7 @@ interface ApiResponse {
 }
 
 const IMAGE_ENDPOINT = "/api/v1/services/aigc/text2image/image-synthesis";
+const IMAGE_EDIT_ENDPOINT = "/api/v1/services/aigc/image2image/image-synthesis";
 const VIDEO_ENDPOINT = "/api/v1/services/aigc/video-generation/video-synthesis";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -138,22 +139,47 @@ export async function createImageTask(
   settings: Settings,
   payload: ImageTaskPayload,
 ): Promise<string> {
-  const body = {
-    model: payload.model,
-    input: {
-      prompt: payload.prompt,
-      ...(payload.negativePrompt ? { negative_prompt: payload.negativePrompt } : {}),
+  const isEdit = Boolean(payload.imageUrl);
+
+  // 图生图（图像编辑）：原图 + 编辑指令，走 image2image 接口。
+  // 该接口不支持 negative_prompt，输出比例跟随原图。
+  const body = isEdit
+    ? {
+        model: payload.model,
+        input: {
+          function: payload.editFunction || "description_edit",
+          prompt: payload.prompt,
+          base_image_url: payload.imageUrl,
+        },
+        parameters: {
+          n: payload.count,
+          watermark: payload.watermark,
+          prompt_extend: payload.promptExtend,
+        },
+      }
+    : {
+        model: payload.model,
+        input: {
+          prompt: payload.prompt,
+          ...(payload.negativePrompt ? { negative_prompt: payload.negativePrompt } : {}),
+        },
+        parameters: {
+          size: payload.size,
+          n: payload.count,
+          prompt_extend: payload.promptExtend,
+          watermark: payload.watermark,
+        },
+      };
+
+  const response = await request(
+    settings,
+    isEdit ? IMAGE_EDIT_ENDPOINT : IMAGE_ENDPOINT,
+    "POST",
+    body,
+    {
+      headers: { "X-DashScope-Async": "enable" },
     },
-    parameters: {
-      size: payload.size,
-      n: payload.count,
-      prompt_extend: payload.promptExtend,
-      watermark: payload.watermark,
-    },
-  };
-  const response = await request(settings, IMAGE_ENDPOINT, "POST", body, {
-    headers: { "X-DashScope-Async": "enable" },
-  });
+  );
   assertOk(response);
   return extractTaskId(response.body);
 }

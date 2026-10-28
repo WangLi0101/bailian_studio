@@ -25,10 +25,12 @@ export function Gallery({
   onCreateImage,
   onCreateVideo,
   onUseAsFrame,
+  onEditImage,
 }: {
   onCreateImage: () => void;
   onCreateVideo: () => void;
   onUseAsFrame: (item: LibraryItem) => void;
+  onEditImage: (item: LibraryItem) => void;
 }) {
   const {
     library,
@@ -287,6 +289,7 @@ export function Gallery({
         item={lightboxItem}
         onClose={() => setLightboxItem(null)}
         onUseAsFrame={onUseAsFrame}
+        onEditImage={onEditImage}
       />
     </>
   );

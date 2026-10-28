@@ -9,6 +9,7 @@ import {
   Loader2,
   Trash2,
   Video,
+  Wand2,
   X,
 } from "lucide-react";
 import type { LibraryItem } from "../types";
@@ -21,10 +22,12 @@ export function MediaLightbox({
   item,
   onClose,
   onUseAsFrame,
+  onEditImage,
 }: {
   item: LibraryItem | null;
   onClose: () => void;
   onUseAsFrame?: (item: LibraryItem) => void;
+  onEditImage?: (item: LibraryItem) => void;
 }) {
   const { addLibraryItem, removeLibraryItem, notify, getImageModel, getVideoModel } =
     useApp();
@@ -194,6 +197,19 @@ export function MediaLightbox({
             >
               打开{isVideo ? "视频" : "原图"}链接
             </Button>
+            {!isVideo && onEditImage && (
+              <Button
+                fullWidth
+                variant="tonal"
+                onClick={() => {
+                  onEditImage(item);
+                  onClose();
+                }}
+                icon={<Wand2 className="h-4 w-4" />}
+              >
+                图生图编辑
+              </Button>
+            )}
             {!isVideo && onUseAsFrame && (
               <Button
                 fullWidth

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { LibraryItem, PageKey, VideoHandoff } from "./types";
+import type { ImageHandoff, LibraryItem, PageKey, VideoHandoff } from "./types";
 import { useApp } from "./context/AppContext";
 import { NavRail } from "./components/NavRail";
 import { TopBar } from "./components/TopBar";
@@ -12,7 +12,7 @@ import { cn } from "./lib/cn";
 const PAGE_META: Record<PageKey, { title: string; subtitle: string }> = {
   image: {
     title: "图片创作",
-    subtitle: "用文字描述，让 Wan 为你绘制画面",
+    subtitle: "文生图或上传原图改图，让 Wan 为你绘制画面",
   },
   video: {
     title: "视频创作",
@@ -32,6 +32,7 @@ export default function App() {
   const { library } = useApp();
   const [page, setPage] = useState<PageKey>("image");
   const [handoff, setHandoff] = useState<VideoHandoff | null>(null);
+  const [imageHandoff, setImageHandoff] = useState<ImageHandoff | null>(null);
   const scrollRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -49,6 +50,15 @@ export default function App() {
 
   const clearHandoff = useCallback(() => {
     setHandoff(null);
+  }, []);
+
+  const editImage = useCallback((item: LibraryItem) => {
+    setImageHandoff({ imageUrl: item.urls[0], prompt: item.prompt });
+    setPage("image");
+  }, []);
+
+  const clearImageHandoff = useCallback(() => {
+    setImageHandoff(null);
   }, []);
 
   const meta = PAGE_META[page];
@@ -77,6 +87,9 @@ export default function App() {
                 onOpenSettings={() => navigate("settings")}
                 onNavigateGallery={() => navigate("gallery")}
                 onUseAsFrame={useAsFrame}
+                onEditImage={editImage}
+                handoff={imageHandoff}
+                onClearHandoff={clearImageHandoff}
               />
             </section>
 
@@ -100,6 +113,7 @@ export default function App() {
                 onCreateImage={() => navigate("image")}
                 onCreateVideo={() => navigate("video")}
                 onUseAsFrame={useAsFrame}
+                onEditImage={editImage}
               />
             </section>
 

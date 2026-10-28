@@ -9,7 +9,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { CustomModel, CustomModelCategory, Settings } from "../types";
+import type { CustomModel, CustomModelCategory, ModelKind, Settings } from "../types";
 import { useApp } from "../context/AppContext";
 import { IMAGE_MODELS, VIDEO_MODELS } from "../lib/models";
 import { cn } from "../lib/cn";
@@ -34,7 +34,7 @@ interface Draft {
   id: string;
   label: string;
   category: CustomModelCategory;
-  kind: "t2v" | "i2v";
+  kind: ModelKind;
   protocol: "legacy" | "v2";
   desc: string;
   sizes: string;
@@ -47,7 +47,7 @@ const EMPTY_DRAFT: Draft = {
   id: "",
   label: "",
   category: "image",
-  kind: "t2v",
+  kind: "t2i",
   protocol: "legacy",
   desc: "",
   sizes: "",
@@ -72,7 +72,7 @@ function draftFromModel(model: CustomModel): Draft {
     id: model.id,
     label: model.label,
     category: model.category,
-    kind: model.kind ?? "t2v",
+    kind: model.kind ?? (model.category === "video" ? "t2v" : "t2i"),
     protocol: model.protocol === "v2" ? "v2" : "legacy",
     desc: model.desc ?? "",
     sizes: (model.sizes ?? []).join(", "),
@@ -183,7 +183,11 @@ export function CustomModelManager() {
               : { sizes: sizes.length ? sizes : undefined }),
             durations: durations.length ? [...new Set(durations)] : undefined,
           }
-        : { sizes: sizes.length ? sizes : undefined }),
+        : {
+            // 图片模型：图生图走图像编辑接口（比例跟随原图），文生图可选尺寸。
+            kind: draft.kind,
+            ...(draft.kind === "i2i" ? {} : { sizes: sizes.length ? sizes : undefined }),
+          }),
       maxPrompt,
     };
 
@@ -302,7 +306,9 @@ export function CustomModelManager() {
                         ? model.kind === "i2v"
                           ? "图生视频"
                           : "文生视频"
-                        : "文生图"}
+                        : model.kind === "i2i"
+                          ? "图生图"
+                          : "文生图"}
                     </Chip>
                     {model.protocol === "v2" && (
                       <Chip className="px-1.5 py-0.5 text-[9px]">新版协议</Chip>
@@ -399,7 +405,12 @@ export function CustomModelManager() {
                 className="w-full [&>button]:flex-1"
                 ariaLabel="模型类型"
                 value={draft.category}
-                onChange={(value) => patchDraft({ category: value })}
+                onChange={(value) =>
+                  patchDraft({
+                    category: value,
+                    kind: value === "video" ? "t2v" : "t2i",
+                  })
+                }
                 options={[
                   {
                     value: "image",
@@ -414,21 +425,32 @@ export function CustomModelManager() {
                 ]}
               />
             </div>
-            {draft.category === "video" && (
-              <div>
-                <Label>生成方式</Label>
+            <div>
+              <Label>生成方式</Label>
+              {draft.category === "video" ? (
                 <Segmented<"t2v" | "i2v">
                   className="w-full [&>button]:flex-1"
                   ariaLabel="生成方式"
-                  value={draft.kind}
+                  value={draft.kind as "t2v" | "i2v"}
                   onChange={(value) => patchDraft({ kind: value })}
                   options={[
                     { value: "t2v", label: "文生视频" },
                     { value: "i2v", label: "图生视频" },
                   ]}
                 />
-              </div>
-            )}
+              ) : (
+                <Segmented<"t2i" | "i2i">
+                  className="w-full [&>button]:flex-1"
+                  ariaLabel="生成方式"
+                  value={draft.kind as "t2i" | "i2i"}
+                  onChange={(value) => patchDraft({ kind: value })}
+                  options={[
+                    { value: "t2i", label: "文生图" },
+                    { value: "i2i", label: "图生图" },
+                  ]}
+                />
+              )}
+            </div>
           </div>
 
           {draft.category === "video" && (
@@ -478,6 +500,12 @@ export function CustomModelManager() {
                 {draft.protocol === "v2"
                   ? "留空则使用全部三档；新版协议下文生视频提供常用比例选择，图生视频比例跟随首帧。"
                   : "留空则使用全部三档；画面比例跟随首帧图片。"}
+              </Hint>
+            </div>
+          ) : draft.kind === "i2i" ? (
+            <div className="mt-3">
+              <Hint>
+                图生图模型调用图像编辑接口，输出画面的比例跟随输入原图，无需填写尺寸。
               </Hint>
             </div>
           ) : (
@@ -547,7 +575,7 @@ export function CustomModelManager() {
               取消
             </Button>
             <span className="text-[10px] text-ink-3">
-              仅支持百炼文生图 / 视频生成接口的模型
+              仅支持百炼文生图 / 图像编辑 / 视频生成接口的模型
             </span>
           </div>
         </form>

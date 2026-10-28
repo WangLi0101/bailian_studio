@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   ChevronDown,
@@ -7,19 +7,28 @@ import {
   Download,
   ExternalLink,
   Image as ImageIcon,
+  ImagePlus,
+  Link2,
   PenLine,
   RefreshCw,
   SlidersHorizontal,
   Sparkles,
+  Upload,
   Video,
   Wand2,
+  X,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { buildLibraryItem, useGeneration } from "../hooks/useGeneration";
 import { useMediaActions } from "../hooks/useMediaActions";
 import { createImageTask } from "../lib/api";
-import { IMAGE_PROMPT_IDEAS, clampImageSize } from "../lib/models";
-import type { LibraryItem } from "../types";
+import {
+  IMAGE_EDIT_PROMPT_IDEAS,
+  IMAGE_PROMPT_IDEAS,
+  clampImageEditFunction,
+  clampImageSize,
+} from "../lib/models";
+import type { ImageHandoff, LibraryItem } from "../types";
 import { SectionCard } from "../components/SectionCard";
 import { SetupBanner } from "../components/SetupBanner";
 import { ModelSelect } from "../components/ModelSelect";
@@ -30,8 +39,75 @@ import { TaskProgress } from "../components/TaskProgress";
 import { SmartImage } from "../components/SmartImage";
 import { RecentStrip } from "../components/RecentStrip";
 import { MediaLightbox } from "../components/MediaLightbox";
-import { Button, Chip, Label, Segmented, Switch, TextArea } from "../components/ui";
+import {
+  Button,
+  Chip,
+  Hint,
+  Label,
+  Segmented,
+  Switch,
+  TextArea,
+  TextInput,
+} from "../components/ui";
 import { cn } from "../lib/cn";
+
+const isHttpUrl = (value: string) => /^https?:\/\/\S+$/i.test(value.trim());
+
+/** 百炼图像编辑接口支持 data:image/...;base64,... 形式的本地图片。 */
+const isDataImageUrl = (value: string) =>
+  /^data:image\/(?:png|jpe?g|bmp|webp);base64,[a-z0-9+/=]+$/i.test(value.trim());
+
+const isEditImageRef = (value: string) => isHttpUrl(value) || isDataImageUrl(value);
+
+/** 接口限制文件不超过 20MB；Base64 编码约膨胀 1/3，原始文件预留 15MB。 */
+const MAX_IMAGE_FILE_BYTES = 15 * 1024 * 1024;
+const IMAGE_FILE_TYPES = ["image/jpeg", "image/png", "image/bmp", "image/webp"];
+
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("文件读取失败，请重试"));
+    };
+    reader.onerror = () => reject(new Error("文件读取失败，请重试"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片解析失败，文件可能已损坏"));
+    image.src = src;
+  });
+}
+
+/**
+ * 为本地图片生成小尺寸缩略图，用于预览与作品库持久化：
+ * 完整 Base64 动辄数 MB，直接写入 localStorage 会挤爆存储配额。
+ */
+async function shrinkForDisplay(dataUrl: string): Promise<string> {
+  try {
+    const image = await loadImageElement(dataUrl);
+    const scale = Math.min(1, 480 / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return dataUrl;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return dataUrl;
+  }
+}
 
 const formatElapsed = (seconds: number) =>
   seconds < 60
@@ -42,10 +118,16 @@ export function ImageStudio({
   onOpenSettings,
   onNavigateGallery,
   onUseAsFrame,
+  onEditImage,
+  handoff,
+  onClearHandoff,
 }: {
   onOpenSettings: () => void;
   onNavigateGallery: () => void;
   onUseAsFrame: (item: LibraryItem) => void;
+  onEditImage: (item: LibraryItem) => void;
+  handoff: ImageHandoff | null;
+  onClearHandoff: () => void;
 }) {
   const {
     settings,
@@ -62,9 +144,17 @@ export function ImageStudio({
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
   const [size, setSize] = useState(
-    () => getImageModel(settings.imageModel).sizes[0].value,
+    () => getImageModel(settings.imageModel).sizes[0]?.value ?? "",
   );
   const [count, setCount] = useState(1);
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageFile, setImageFile] = useState<{ name: string; size: number } | null>(
+    null,
+  );
+  const [editFunction, setEditFunction] = useState(() =>
+    clampImageEditFunction(getImageModel(settings.imageModel), "description_edit"),
+  );
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [lastItem, setLastItem] = useState<LibraryItem | null>(null);
@@ -72,7 +162,10 @@ export function ImageStudio({
 
   const hasKey = Boolean(settings.apiKey.trim());
   const model = getImageModel(settings.imageModel);
+  const isEditModel = model.kind === "i2i";
+  const isLocalImage = isDataImageUrl(imageUrl);
   const isBusy = generation.isBusy;
+  const imageValid = !imageUrl.trim() || isEditImageRef(imageUrl);
   const snapshot = generation.snapshot;
   const urls = snapshot?.urls ?? [];
   const activeUrl = urls[selectedIndex] ?? urls[0] ?? "";
@@ -86,21 +179,68 @@ export function ImageStudio({
       : null;
   const resultItem = lastItem ?? restoredItem;
   const activeModel = getImageModel(resultItem?.model ?? settings.imageModel);
-  const sizeLabel = size.replace("*", " × ");
-  const resultSizeLabel = (resultItem?.size ?? size).replace("*", " × ");
+  const sizeLabel = isEditModel ? "跟随原图" : size.replace("*", " × ");
+  const resultSizeLabel = (resultItem?.size ?? sizeLabel).replace("*", " × ");
   const maxPrompt = model.maxPrompt ?? 1500;
+  const editFunctionOptions = model.editFunctions ?? [];
 
   const handleModelChange = (value: string) => {
+    const next = getImageModel(value);
     updateSettings({ imageModel: value });
-    setSize(clampImageSize(getImageModel(value), size));
+    setSize(clampImageSize(next, size));
+    setEditFunction(clampImageEditFunction(next, editFunction));
+    if (next.kind !== "i2i") setImageUrl("");
   };
 
   // 在「设置」页切换默认模型或增删自定义模型后，保持当前尺寸合法。
   useEffect(() => {
-    setSize((previous) =>
-      clampImageSize(getImageModel(settings.imageModel), previous),
-    );
+    const current = getImageModel(settings.imageModel);
+    setSize((previous) => clampImageSize(current, previous));
+    setEditFunction((previous) => clampImageEditFunction(current, previous));
+    if (current.kind !== "i2i") setImageUrl("");
   }, [settings.imageModel, getImageModel]);
+
+  // 从作品库带图进入：自动切换到图生图模型并回填提示词。
+  useEffect(() => {
+    if (!handoff) return;
+    setImageUrl(handoff.imageUrl);
+    setImageFile(null);
+    const current = getImageModel(settings.imageModel);
+    if (current.kind !== "i2i") {
+      updateSettings({ imageModel: "wanx2.1-imageedit" });
+    }
+    setPrompt((previous) => (previous.trim() ? previous : (handoff.prompt ?? previous)));
+    onClearHandoff();
+    // The handoff is one-shot; clearing it above prevents a second run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handoff]);
+
+  const handleImageFile = async (file: File | undefined) => {
+    if (!file) return;
+    const typeOk =
+      IMAGE_FILE_TYPES.includes(file.type) ||
+      /\.(jpe?g|png|bmp|webp)$/i.test(file.name);
+    if (!typeOk) {
+      notify("参考图片仅支持 JPEG、PNG、BMP、WEBP 格式", { severity: "error" });
+      return;
+    }
+    if (file.size > MAX_IMAGE_FILE_BYTES) {
+      notify("参考图片不能超过 15MB，请压缩后重试", { severity: "error" });
+      return;
+    }
+    try {
+      const dataUrl = await readAsDataUrl(file);
+      // 触发一次解析校验：损坏文件在提交前就暴露。
+      await loadImageElement(dataUrl);
+      setImageFile({ name: file.name, size: file.size });
+      setImageUrl(dataUrl);
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "图片读取失败，请重试",
+        { severity: "error" },
+      );
+    }
+  };
 
   const handleGenerate = async () => {
     if (!hasKey) {
@@ -109,22 +249,39 @@ export function ImageStudio({
     }
     const trimmed = prompt.trim();
     if (!trimmed || isBusy) return;
+    if (isEditModel && !imageValid) return;
 
     const usedModel = settings.imageModel;
+    const usesImage = isEditModel && Boolean(imageUrl.trim());
+    // 本地 Base64 体积大，作品库 / 待恢复任务里只存缩略图，避免挤爆 localStorage。
+    const submittedImage = usesImage ? imageUrl.trim() : undefined;
+    const persistedImage =
+      submittedImage && isDataImageUrl(submittedImage)
+        ? await shrinkForDisplay(submittedImage)
+        : submittedImage;
+
     setLastItem(null);
     setSelectedIndex(0);
 
     const created = await generation.submit(
-      { prompt: trimmed, negativePrompt: negative.trim() || undefined, model: usedModel, size },
+      {
+        prompt: trimmed,
+        negativePrompt: !usesImage ? negative.trim() || undefined : undefined,
+        model: usedModel,
+        size: usesImage ? undefined : size,
+        inputImageUrl: persistedImage,
+      },
       () =>
         createImageTask(settings, {
           prompt: trimmed,
-          negativePrompt: negative.trim() || undefined,
+          negativePrompt: !usesImage ? negative.trim() || undefined : undefined,
           size,
           count,
           model: usedModel,
           promptExtend: settings.promptExtend,
           watermark: settings.watermark,
+          imageUrl: submittedImage,
+          editFunction: usesImage ? editFunction : undefined,
         }),
     );
 
@@ -138,11 +295,12 @@ export function ImageStudio({
       kind: "image",
       urls: created.urls,
       prompt: trimmed,
-      negativePrompt: negative.trim() || undefined,
+      negativePrompt: !usesImage ? negative.trim() || undefined : undefined,
       model: usedModel,
-      size,
+      size: usesImage ? undefined : size,
       createdAt: Date.now(),
       taskId: created.taskId,
+      inputImageUrl: persistedImage,
     };
     setLastItem(item);
     addLibraryItem(item);
@@ -157,6 +315,19 @@ export function ImageStudio({
   const openResult = () => {
     if (!resultItem || !activeUrl) return;
     setLightboxItem({ ...resultItem, urls: [activeUrl] });
+  };
+
+  // 把当前结果作为原图，继续图生图编辑（自动切换到图像编辑模型）。
+  const editThisImage = () => {
+    if (!activeUrl) return;
+    if (model.kind !== "i2i") {
+      const target = getImageModel("wanx2.1-imageedit");
+      updateSettings({ imageModel: "wanx2.1-imageedit" });
+      setSize(clampImageSize(target, size));
+      setEditFunction(clampImageEditFunction(target, editFunction));
+    }
+    setImageUrl(activeUrl);
+    setImageFile(null);
   };
 
   return (
@@ -177,7 +348,11 @@ export function ImageStudio({
               onChange={(event) => setPrompt(event.target.value)}
               rows={4}
               maxLength={maxPrompt}
-              placeholder="例如：晨雾中的江南水乡，白墙黛瓦，一叶乌篷船缓缓划过，柔和晨光，电影感构图…"
+              placeholder={
+                isEditModel
+                  ? "描述想要的修改，例如：把背景换成黄昏的海边，暖金色光线，主体保持不变…"
+                  : "例如：晨雾中的江南水乡，白墙黛瓦，一叶乌篷船缓缓划过，柔和晨光，电影感构图…"
+              }
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                   event.preventDefault();
@@ -193,8 +368,117 @@ export function ImageStudio({
             </div>
 
             <div className="mt-3">
-              <PromptIdeas ideas={IMAGE_PROMPT_IDEAS} onPick={setPrompt} />
+              <PromptIdeas
+                ideas={isEditModel ? IMAGE_EDIT_PROMPT_IDEAS : IMAGE_PROMPT_IDEAS}
+                onPick={setPrompt}
+              />
             </div>
+
+            {isEditModel && (
+              <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+                    <ImagePlus className="h-3.5 w-3.5" />
+                    原图
+                    <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[9px] font-medium text-ink-3">
+                      必填
+                    </span>
+                  </span>
+                  {imageUrl && (
+                    <span
+                      className={cn(
+                        "text-[9.5px] font-medium",
+                        imageValid ? "text-success" : "text-danger",
+                      )}
+                    >
+                      {imageValid ? "格式有效" : "请粘贴 http(s) 地址或上传本地图片"}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-stretch gap-2">
+                  {isLocalImage ? (
+                    <>
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-line bg-surface-1 px-2.5 py-2">
+                        <div className="h-11 w-[72px] shrink-0 overflow-hidden rounded-lg border border-line bg-surface-2">
+                          <SmartImage
+                            src={imageUrl}
+                            alt="原图预览"
+                            className="h-full w-full"
+                          />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[11.5px] font-semibold text-ink">
+                            {imageFile?.name ?? "粘贴的 Base64 图片"}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-ink-3">
+                            {imageFile
+                              ? `${formatBytes(imageFile.size)} · 已转为 Base64，提交时直接上传`
+                              : "Base64 图片数据，提交时直接上传"}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setImageUrl("");
+                          setImageFile(null);
+                        }}
+                        icon={<X className="h-4 w-4" />}
+                        aria-label="移除本地图片"
+                      >
+                        移除
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <TextInput
+                        value={imageUrl}
+                        onChange={(event) => {
+                          setImageUrl(event.target.value);
+                          setImageFile(null);
+                        }}
+                        leading={<Link2 className="h-4 w-4" />}
+                        placeholder="https://your-oss-bucket/photo.jpg"
+                        containerClassName="flex-1"
+                        aria-label="原图地址"
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={() => fileRef.current?.click()}
+                        icon={<Upload className="h-4 w-4" />}
+                        title="上传本地图片"
+                        aria-label="上传本地图片"
+                      >
+                        上传
+                      </Button>
+                      {imageUrl && imageValid && (
+                        <div className="h-11 w-[72px] shrink-0 overflow-hidden rounded-xl border border-line bg-surface-1">
+                          <SmartImage
+                            src={imageUrl}
+                            alt="原图预览"
+                            className="h-full w-full"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/jpeg,image/jpg,image/png,image/bmp,image/webp"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleImageFile(event.target.files?.[0]);
+                    // 允许移除后再次选择同一文件。
+                    event.target.value = "";
+                  }}
+                />
+                <Hint className="mt-1.5">
+                  支持公网图片地址或上传本地图片（JPEG/PNG/BMP/WEBP，≤15MB）。也可以从作品库点击「图生图编辑」自动带入。
+                </Hint>
+              </div>
+            )}
 
             <button
               type="button"
@@ -224,6 +508,11 @@ export function ImageStudio({
                   style={{ minHeight: 82 }}
                   placeholder="不希望出现的内容，例如：模糊、低质量、文字、多余手指…"
                 />
+                {isEditModel && (
+                  <Hint className="mt-1.5">
+                    图生图接口暂不支持负向提示词，填写的内容不会提交。
+                  </Hint>
+                )}
               </div>
             )}
 
@@ -232,13 +521,25 @@ export function ImageStudio({
                 fullWidth
                 size="lg"
                 loading={isBusy}
-                disabled={hasKey ? !prompt.trim() : false}
+                disabled={
+                  hasKey
+                    ? !prompt.trim() || (isEditModel && (!imageUrl.trim() || !imageValid))
+                    : false
+                }
                 onClick={() => {
                   void handleGenerate();
                 }}
                 icon={<Wand2 className="h-[18px] w-[18px]" />}
               >
-                {!hasKey ? "配置 API Key 后开始" : isBusy ? "正在生成…" : "生成图片"}
+                {!hasKey
+                  ? "配置 API Key 后开始"
+                  : isBusy
+                    ? "正在生成…"
+                    : isEditModel && !imageUrl.trim()
+                      ? "上传或填写原图后开始"
+                      : isEditModel
+                        ? "编辑图片"
+                        : "生成图片"}
               </Button>
               <p className="mt-2 text-center text-[10px] text-ink-3">
                 {model.label} · {sizeLabel} · {count} 张 · 自动收藏
@@ -253,7 +554,18 @@ export function ImageStudio({
             bodyClassName="p-5"
             dense
           >
-            <Label>模型</Label>
+            <Label
+              trailing={
+                <Chip
+                  tone={isEditModel ? "primary" : "neutral"}
+                  className="px-1.5 py-0.5 text-[9px]"
+                >
+                  {isEditModel ? "图生图" : "文生图"}
+                </Chip>
+              }
+            >
+              模型
+            </Label>
             <ModelSelect
               models={imageModels}
               value={settings.imageModel}
@@ -262,10 +574,26 @@ export function ImageStudio({
               label="图片生成模型"
             />
 
-            <div className="mt-4">
-              <Label>画面比例</Label>
-              <SizeGrid options={model.sizes} value={size} onChange={setSize} />
-            </div>
+            {isEditModel ? (
+              <div className="mt-4">
+                <Label>编辑功能</Label>
+                <Segmented<string>
+                  className="w-full flex-wrap [&>button]:flex-1"
+                  ariaLabel="编辑功能"
+                  value={editFunction}
+                  onChange={setEditFunction}
+                  options={editFunctionOptions}
+                />
+                <Hint className="mt-1.5">
+                  输出画面的比例跟随原图；「指令编辑」用文字描述想要的修改即可。
+                </Hint>
+              </div>
+            ) : (
+              <div className="mt-4">
+                <Label>画面比例</Label>
+                <SizeGrid options={model.sizes} value={size} onChange={setSize} />
+              </div>
+            )}
 
             <div className="mt-4">
               <Label>生成数量</Label>
@@ -329,7 +657,7 @@ export function ImageStudio({
                   </p>
                   <div className="mt-5 flex flex-wrap justify-center gap-1.5">
                     <Chip tone="primary" icon={<Sparkles className="h-3 w-3" />}>
-                      Wan 文生图
+                      {isEditModel ? "Wan 图生图" : "Wan 文生图"}
                     </Chip>
                     <Chip>{sizeLabel}</Chip>
                     <Chip>{count} 张</Chip>
@@ -503,6 +831,14 @@ export function ImageStudio({
                     >
                       用作视频首帧
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={editThisImage}
+                      icon={<Wand2 className="h-3.5 w-3.5" />}
+                    >
+                      图生图编辑
+                    </Button>
                   </div>
                   <Button
                     size="sm"
@@ -545,6 +881,7 @@ export function ImageStudio({
         item={lightboxItem}
         onClose={() => setLightboxItem(null)}
         onUseAsFrame={onUseAsFrame}
+        onEditImage={onEditImage}
       />
     </>
   );

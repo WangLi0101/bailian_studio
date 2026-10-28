@@ -25,13 +25,15 @@ export type CustomModelCategory = "image" | "video";
  * 自定义模型只保存「调用所需的最少信息」，运行时再转换成 ModelOption。
  * 内置模型仍然来自 models.ts，二者在界面上合并展示。
  */
+export type ModelKind = "t2i" | "i2i" | "t2v" | "i2v";
+
 export interface CustomModel {
   /** 传给 DashScope 的模型 ID。 */
   id: string;
   label: string;
   category: CustomModelCategory;
-  /** 仅视频模型有效：文生视频 / 图生视频。 */
-  kind?: "t2v" | "i2v";
+  /** 文生图 / 图生图（图片模型）、文生视频 / 图生视频（视频模型）。 */
+  kind?: ModelKind;
   /** 视频模型接口协议：旧版（size / img_url）或新版（resolution / ratio / media）。 */
   protocol?: "legacy" | "v2";
   desc?: string;
@@ -71,7 +73,9 @@ export interface ModelOption {
   label: string;
   desc: string;
   tag?: string;
-  kind?: "t2v" | "i2v";
+  kind?: ModelKind;
+  /** 图生图（图像编辑）模型支持的编辑功能，对应 input.function。 */
+  editFunctions?: Array<{ value: string; label: string }>;
   /** 新版协议（wan2.7 / wan3.0 / HappyHorse）：resolution + ratio 与 media 传参。 */
   protocol?: "legacy" | "v2";
   /** All-in-One 模型（wan3.0）：文生/图生视频共用一个模型 ID，首帧图片可选。 */
@@ -120,6 +124,10 @@ export interface ImageTaskPayload {
   model: string;
   promptExtend: boolean;
   watermark: boolean;
+  /** 图生图（图像编辑）：输入原图，支持公网地址或 Base64。 */
+  imageUrl?: string;
+  /** 图生图：编辑功能（input.function），如 description_edit。 */
+  editFunction?: string;
 }
 
 export interface VideoTaskPayload {
@@ -158,6 +166,11 @@ export interface ToastOptions {
 }
 
 export interface VideoHandoff {
+  imageUrl: string;
+  prompt?: string;
+}
+
+export interface ImageHandoff {
   imageUrl: string;
   prompt?: string;
 }
