@@ -15,7 +15,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { useGeneration } from "../hooks/useGeneration";
+import { buildLibraryItem, useGeneration } from "../hooks/useGeneration";
 import { useMediaActions } from "../hooks/useMediaActions";
 import { createImageTask } from "../lib/api";
 import { IMAGE_PROMPT_IDEAS, clampImageSize } from "../lib/models";
@@ -32,6 +32,11 @@ import { RecentStrip } from "../components/RecentStrip";
 import { MediaLightbox } from "../components/MediaLightbox";
 import { Button, Chip, Label, Segmented, Switch, TextArea } from "../components/ui";
 import { cn } from "../lib/cn";
+
+const formatElapsed = (seconds: number) =>
+  seconds < 60
+    ? `${seconds} 秒`
+    : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 
 export function ImageStudio({
   onOpenSettings,
@@ -51,7 +56,7 @@ export function ImageStudio({
     imageModels,
     getImageModel,
   } = useApp();
-  const generation = useGeneration(settings);
+  const generation = useGeneration("image");
   const { download, openOriginal, downloadingUrl } = useMediaActions();
 
   const [prompt, setPrompt] = useState("");
@@ -71,9 +76,15 @@ export function ImageStudio({
   const snapshot = generation.snapshot;
   const urls = snapshot?.urls ?? [];
   const activeUrl = urls[selectedIndex] ?? urls[0] ?? "";
-  const activeModel = getImageModel(lastItem?.model ?? settings.imageModel);
+  // 刷新后恢复展示：lastItem 丢失时用任务元信息 + 快照重建展示条目。
+  const restoredItem =
+    snapshot && generation.meta
+      ? buildLibraryItem("image", generation.meta, snapshot)
+      : null;
+  const resultItem = lastItem ?? restoredItem;
+  const activeModel = getImageModel(resultItem?.model ?? settings.imageModel);
   const sizeLabel = size.replace("*", " × ");
-  const resultSizeLabel = (lastItem?.size ?? size).replace("*", " × ");
+  const resultSizeLabel = (resultItem?.size ?? size).replace("*", " × ");
   const maxPrompt = model.maxPrompt ?? 1500;
 
   const handleModelChange = (value: string) => {
@@ -100,16 +111,18 @@ export function ImageStudio({
     setLastItem(null);
     setSelectedIndex(0);
 
-    const created = await generation.submit(() =>
-      createImageTask(settings, {
-        prompt: trimmed,
-        negativePrompt: negative.trim() || undefined,
-        size,
-        count,
-        model: usedModel,
-        promptExtend: settings.promptExtend,
-        watermark: settings.watermark,
-      }),
+    const created = await generation.submit(
+      { prompt: trimmed, negativePrompt: negative.trim() || undefined, model: usedModel, size },
+      () =>
+        createImageTask(settings, {
+          prompt: trimmed,
+          negativePrompt: negative.trim() || undefined,
+          size,
+          count,
+          model: usedModel,
+          promptExtend: settings.promptExtend,
+          watermark: settings.watermark,
+        }),
     );
 
     if (!created) return;
@@ -139,8 +152,8 @@ export function ImageStudio({
   };
 
   const openResult = () => {
-    if (!lastItem || !activeUrl) return;
-    setLightboxItem({ ...lastItem, urls: [activeUrl] });
+    if (!resultItem || !activeUrl) return;
+    setLightboxItem({ ...resultItem, urls: [activeUrl] });
   };
 
   return (
@@ -284,7 +297,7 @@ export function ImageStudio({
           <SectionCard
             title="结果预览"
             subtitle={
-              snapshot && lastItem
+              snapshot && resultItem
                 ? `${activeModel.label} · ${resultSizeLabel}`
                 : "生成结果会显示在这里"
             }
@@ -292,7 +305,8 @@ export function ImageStudio({
             action={<StatusBadge phase={generation.phase} />}
             bodyClassName="p-4 sm:p-5"
           >
-            {generation.phase === "idle" && (
+            {(generation.phase === "idle" ||
+              (generation.phase === "succeeded" && !resultItem)) && (
               <div className="relative flex min-h-[440px] flex-col items-center justify-center overflow-hidden rounded-[22px] border border-line bg-stage stage-dots px-6 py-12 text-center sm:min-h-[520px]">
                 <div className="pointer-events-none absolute -left-16 -top-24 h-64 w-64 animate-float rounded-full bg-primary/15 blur-3xl" />
                 <div className="pointer-events-none absolute -bottom-28 -right-12 h-72 w-72 animate-float-delayed rounded-full bg-secondary/12 blur-3xl" />
@@ -337,7 +351,8 @@ export function ImageStudio({
                   phase={generation.phase}
                   elapsed={generation.elapsed}
                   taskId={generation.taskId}
-                  kind="image"
+                  kind={generation.kind ?? "image"}
+                  rawStatus={generation.rawStatus}
                   onCancel={generation.cancel}
                 />
               </div>
@@ -398,12 +413,12 @@ export function ImageStudio({
               </div>
             )}
 
-            {generation.phase === "succeeded" && snapshot && lastItem && activeUrl && (
+            {generation.phase === "succeeded" && snapshot && resultItem && activeUrl && (
               <div className="space-y-3">
                 <div className="group relative flex min-h-[420px] items-center justify-center overflow-hidden rounded-[22px] border border-line bg-stage p-2 sm:min-h-[520px]">
                   <SmartImage
                     src={activeUrl}
-                    alt={lastItem.prompt}
+                    alt={resultItem.prompt}
                     fit="contain"
                     eager
                     onClick={openResult}
@@ -480,7 +495,7 @@ export function ImageStudio({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => onUseAsFrame({ ...lastItem, urls: [activeUrl] })}
+                      onClick={() => onUseAsFrame({ ...resultItem, urls: [activeUrl] })}
                       icon={<Video className="h-3.5 w-3.5" />}
                     >
                       用作视频首帧
@@ -506,7 +521,7 @@ export function ImageStudio({
                   <span>·</span>
                   <span>{resultSizeLabel}</span>
                   <span>·</span>
-                  <span>耗时 {generation.elapsed} 秒</span>
+                  <span>耗时 {formatElapsed(generation.elapsed)}</span>
                   <span>·</span>
                   <span>链接 24 小时内有效，请及时保存</span>
                 </div>

@@ -2,7 +2,9 @@ import type {
   AccentId,
   CustomModel,
   LibraryItem,
+  MediaKind,
   Settings,
+  TaskMeta,
   ThemeMode,
 } from "../types";
 import {
@@ -216,6 +218,101 @@ export function saveLibrary(items: LibraryItem[]): void {
 export function clearPersistedLibrary(): void {
   try {
     localStorage.removeItem(LIBRARY_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+const PENDING_TASKS_KEY = "bailian-studio.pending-tasks.v1";
+
+/**
+ * 刷新前仍在云端渲染的任务（图片 / 视频各一条通道）。恢复跟踪后继续轮询，
+ * 完成时直接把结果写入作品库。
+ */
+export interface PendingTaskRecord {
+  taskId: string;
+  kind: MediaKind;
+  startedAt: number;
+  meta: TaskMeta;
+}
+
+function parsePendingTask(value: unknown): PendingTaskRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const parsed = value as Record<string, unknown>;
+  const taskId = typeof parsed.taskId === "string" ? parsed.taskId.trim() : "";
+  const kind =
+    parsed.kind === "image" || parsed.kind === "video" ? parsed.kind : null;
+  const startedAt =
+    typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt)
+      ? parsed.startedAt
+      : null;
+  const metaSource =
+    parsed.meta && typeof parsed.meta === "object"
+      ? (parsed.meta as Record<string, unknown>)
+      : null;
+  const prompt = typeof metaSource?.prompt === "string" ? metaSource.prompt : "";
+  const model = typeof metaSource?.model === "string" ? metaSource.model : "";
+  if (!taskId || !kind || startedAt === null || !prompt || !model) return null;
+
+  const asOptionalString = (key: string): string | undefined => {
+    const value = metaSource?.[key];
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+  const duration = metaSource?.duration;
+  const negativePrompt = asOptionalString("negativePrompt");
+
+  return {
+    taskId,
+    kind,
+    startedAt,
+    meta: {
+      prompt,
+      model,
+      ...(negativePrompt ? { negativePrompt } : {}),
+      ...(asOptionalString("size") ? { size: asOptionalString("size") } : {}),
+      ...(typeof duration === "number" && Number.isFinite(duration) && duration > 0
+        ? { duration }
+        : {}),
+      ...(asOptionalString("inputImageUrl")
+        ? { inputImageUrl: asOptionalString("inputImageUrl") }
+        : {}),
+    },
+  };
+}
+
+export function loadPendingTasks(): Partial<Record<MediaKind, PendingTaskRecord>> {
+  try {
+    const raw = localStorage.getItem(PENDING_TASKS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const result: Partial<Record<MediaKind, PendingTaskRecord>> = {};
+    for (const kind of ["image", "video"] as const) {
+      const record = parsePendingTask(parsed[kind]);
+      if (record && record.kind === kind) result[kind] = record;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function savePendingTask(record: PendingTaskRecord): void {
+  try {
+    const current = loadPendingTasks();
+    localStorage.setItem(
+      PENDING_TASKS_KEY,
+      JSON.stringify({ ...current, [record.kind]: record }),
+    );
+  } catch {
+    // Storage may be unavailable; polling continues for the current session.
+  }
+}
+
+export function clearPendingTask(kind: MediaKind): void {
+  try {
+    const current = loadPendingTasks();
+    delete current[kind];
+    localStorage.setItem(PENDING_TASKS_KEY, JSON.stringify(current));
   } catch {
     // ignore
   }

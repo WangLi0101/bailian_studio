@@ -31,6 +31,10 @@ import {
   saveSettings,
 } from "../lib/storage";
 import {
+  bindGenerationSettings,
+  resumePendingTask,
+} from "../hooks/useGeneration";
+import {
   buildImageModels,
   buildVideoModels,
   findImageModel,
@@ -112,6 +116,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveLibrary(library);
   }, [library]);
+
+  // 生成任务引擎使用全局最新设置（如运行中更换 API Key），
+  // 并在应用启动时恢复刷新前仍在云端渲染的任务。
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  useEffect(() => {
+    bindGenerationSettings(() => settingsRef.current);
+    void resumePendingTask({ addLibraryItem, notify });
+    // 应用级一次性初始化；addLibraryItem / notify 均为稳定引用。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;

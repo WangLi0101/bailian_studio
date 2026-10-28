@@ -18,7 +18,7 @@ import {
   Video,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { useGeneration } from "../hooks/useGeneration";
+import { buildLibraryItem, useGeneration } from "../hooks/useGeneration";
 import { useMediaActions } from "../hooks/useMediaActions";
 import { createVideoTask } from "../lib/api";
 import {
@@ -51,6 +51,11 @@ import { cn } from "../lib/cn";
 
 const isHttpUrl = (value: string) => /^https?:\/\/\S+$/i.test(value.trim());
 
+const formatElapsed = (seconds: number) =>
+  seconds < 60
+    ? `${seconds} 秒`
+    : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+
 export function VideoStudio({
   onOpenSettings,
   onNavigateGallery,
@@ -71,7 +76,7 @@ export function VideoStudio({
     videoModels,
     getVideoModel,
   } = useApp();
-  const generation = useGeneration(settings);
+  const generation = useGeneration("video");
   const { download, openOriginal, downloadingUrl } = useMediaActions();
 
   const [prompt, setPrompt] = useState("");
@@ -101,8 +106,15 @@ export function VideoStudio({
   const frameValid = needsImage
     ? isHttpUrl(imageUrl)
     : !acceptsImage || !imageUrl.trim() || isHttpUrl(imageUrl);
-  const activeUrl = lastItem?.urls[0] ?? "";
-  const activeModel = getVideoModel(lastItem?.model ?? settings.videoModel);
+  const snapshot = generation.snapshot;
+  // 刷新后恢复展示：lastItem 丢失时用任务元信息 + 快照重建展示条目。
+  const restoredItem =
+    snapshot && generation.meta
+      ? buildLibraryItem("video", generation.meta, snapshot)
+      : null;
+  const resultItem = lastItem ?? restoredItem;
+  const activeUrl = resultItem?.urls[0] ?? "";
+  const activeModel = getVideoModel(resultItem?.model ?? settings.videoModel);
   const maxPrompt = model.maxPrompt ?? 1500;
   const promptExtendDisabled = model.supportsPromptExtend === false;
   const formatDuration = (value: number) =>
@@ -122,7 +134,7 @@ export function VideoStudio({
     : isV2
       ? `${activeTier} ${activeSize?.label ?? ""}`.trim()
       : size;
-  const currentSizeLabel = (lastItem?.size ?? sizeLabel).replace("*", " × ");
+  const currentSizeLabel = (resultItem?.size ?? sizeLabel).replace("*", " × ");
   const selectionLabel = sizeLabel.replace("*", " × ");
 
   const handleTierChange = (nextTier: string) => {
@@ -222,8 +234,21 @@ export function VideoStudio({
     const usedModel = settings.videoModel;
     setLastItem(null);
 
-    const created = await generation.submit(() =>
-      createVideoTask(settings, {
+    const created = await generation.submit(
+      {
+        prompt: trimmed,
+        negativePrompt: negative.trim() || undefined,
+        model: usedModel,
+        size: needsImage
+          ? resolution
+          : isV2
+            ? `${activeTier} ${activeSize?.label ?? ""}`.trim()
+            : size,
+        duration,
+        inputImageUrl: usesImage ? imageUrl.trim() : undefined,
+      },
+      () =>
+        createVideoTask(settings, {
         prompt: trimmed,
         negativePrompt: negative.trim() || undefined,
         model: usedModel,
@@ -549,15 +574,16 @@ export function VideoStudio({
           <SectionCard
             title="结果预览"
             subtitle={
-              lastItem
-                ? `${activeModel.label} · ${currentSizeLabel} · ${formatDuration(lastItem.duration ?? duration)}`
+              resultItem
+                ? `${activeModel.label} · ${currentSizeLabel} · ${formatDuration(resultItem.duration ?? duration)}`
                 : "生成的视频会显示在这里"
             }
             icon={<Video className="h-[18px] w-[18px]" />}
             action={<StatusBadge phase={generation.phase} />}
             bodyClassName="p-4 sm:p-5"
           >
-            {generation.phase === "idle" && (
+            {(generation.phase === "idle" ||
+              (generation.phase === "succeeded" && !resultItem)) && (
               <div className="relative flex min-h-[440px] flex-col items-center justify-center overflow-hidden rounded-[22px] border border-line bg-stage stage-dots px-6 py-12 text-center sm:min-h-[520px]">
                 <div className="pointer-events-none absolute -left-16 -top-24 h-64 w-64 animate-float rounded-full bg-primary/15 blur-3xl" />
                 <div className="pointer-events-none absolute -bottom-28 -right-12 h-72 w-72 animate-float-delayed rounded-full bg-secondary/12 blur-3xl" />
@@ -605,7 +631,8 @@ export function VideoStudio({
                   phase={generation.phase}
                   elapsed={generation.elapsed}
                   taskId={generation.taskId}
-                  kind="video"
+                  kind={generation.kind ?? "video"}
+                  rawStatus={generation.rawStatus}
                   onCancel={generation.cancel}
                 />
               </div>
@@ -666,7 +693,7 @@ export function VideoStudio({
               </div>
             )}
 
-            {generation.phase === "succeeded" && lastItem && activeUrl && (
+            {generation.phase === "succeeded" && resultItem && activeUrl && (
               <div className="space-y-3">
                 <div className="relative flex min-h-[300px] items-center justify-center overflow-hidden rounded-[22px] border border-line bg-[#08080c] p-2 sm:min-h-[380px]">
                   <video
@@ -678,7 +705,7 @@ export function VideoStudio({
                   />
                   <span className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[10px] font-semibold text-white/85 backdrop-blur-md">
                     <Film className="h-3 w-3" />
-                    {formatDuration(lastItem.duration ?? duration)} · {currentSizeLabel}
+                    {formatDuration(resultItem.duration ?? duration)} · {currentSizeLabel}
                   </span>
                 </div>
 
@@ -708,7 +735,7 @@ export function VideoStudio({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => setLightboxItem(lastItem)}
+                      onClick={() => setLightboxItem(resultItem)}
                       icon={<Timer className="h-3.5 w-3.5" />}
                     >
                       查看详情
@@ -734,9 +761,9 @@ export function VideoStudio({
                   <span>·</span>
                   <span>{currentSizeLabel}</span>
                   <span>·</span>
-                  <span>{formatDuration(lastItem.duration ?? duration)}</span>
+                  <span>{formatDuration(resultItem.duration ?? duration)}</span>
                   <span>·</span>
-                  <span>耗时 {generation.elapsed} 秒</span>
+                  <span>耗时 {formatElapsed(generation.elapsed)}</span>
                   <span>·</span>
                   <span>链接 24 小时内有效，请及时保存</span>
                 </div>

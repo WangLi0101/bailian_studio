@@ -88,6 +88,19 @@ export interface ModelOption {
   maxPrompt?: number;
 }
 
+/**
+ * 提交生成任务时的上下文信息。
+ * 任务在后台完成时（页面切换或刷新后），依据这些信息构建作品库条目。
+ */
+export interface TaskMeta {
+  prompt: string;
+  negativePrompt?: string;
+  model: string;
+  size?: string;
+  duration?: number;
+  inputImageUrl?: string;
+}
+
 export interface TaskSnapshot {
   taskId?: string;
   taskStatus: string;

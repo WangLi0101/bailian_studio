@@ -21,12 +21,15 @@ export function TaskProgress({
   elapsed,
   taskId,
   kind,
+  rawStatus,
   onCancel,
 }: {
   phase: GenerationPhase;
   elapsed: number;
   taskId: string | null;
   kind: "image" | "video";
+  /** 服务端返回的原始状态（PENDING / RUNNING 等）。 */
+  rawStatus?: string;
   onCancel: () => void;
 }) {
   const rawId = useId();
@@ -34,17 +37,15 @@ export function TaskProgress({
   const radius = 58;
   const circumference = 2 * Math.PI * radius;
 
+  // 渐近曲线估算进度：早期快速增长、后期放缓，永远不会自己走到 100%，
+  // 只有真正轮询到 SUCCEEDED 才算完成（成功时由页面渲染结果）。
+  const speed = kind === "image" ? 11 : 95;
   const progress =
     phase === "submitting"
       ? 4
       : phase === "queued"
         ? 10
-        : Math.min(
-            94,
-            Math.round(
-              kind === "image" ? 16 + elapsed * 2.6 : 8 + elapsed * 0.55,
-            ),
-          );
+        : Math.min(94, Math.round(94 * (1 - Math.exp(-elapsed / speed))));
 
   const label =
     phase === "submitting"
@@ -54,6 +55,11 @@ export function TaskProgress({
         : kind === "image"
           ? "正在绘制你的画面"
           : "正在渲染视频画面";
+
+  const formatElapsed = (seconds: number) =>
+    seconds < 60
+      ? `${seconds} 秒`
+      : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 
   const tips = kind === "image" ? IMAGE_TIPS : VIDEO_TIPS;
   const tip = tips[Math.floor(elapsed / 8) % tips.length];
@@ -109,7 +115,7 @@ export function TaskProgress({
         </span>
       </div>
       <p className="mt-1 text-[11px] text-ink-2">
-        已等待 {elapsed} 秒
+        已等待 {formatElapsed(elapsed)}
         {kind === "video" ? " · 视频任务通常需要 2–5 分钟" : " · 通常需要 10–40 秒"}
       </p>
 
@@ -123,6 +129,11 @@ export function TaskProgress({
             {taskId.length > 18 ? `${taskId.slice(0, 16)}…` : taskId}
           </span>
         )}
+        {rawStatus && (
+          <span className="rounded-lg bg-surface-1 px-2 py-1 font-mono text-[10px] tracking-wide text-ink-3">
+            {rawStatus}
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -133,6 +144,9 @@ export function TaskProgress({
           停止等待
         </Button>
       </div>
+      <p className="mt-2 text-[10px] text-ink-3">
+        停止等待仅结束本地跟踪，云端任务会继续完成
+      </p>
     </div>
   );
 }

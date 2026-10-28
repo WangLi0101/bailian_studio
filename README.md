@@ -91,7 +91,8 @@ src-tauri/
 
 ## 实现要点
 
-- **异步任务**：创建任务时携带 `X-DashScope-Async: enable`，随后每 2.5s 轮询 `GET /api/v1/tasks/{task_id}`，状态流转为 `PENDING → RUNNING → SUCCEEDED / FAILED`。
+- **异步任务**：创建任务时携带 `X-DashScope-Async: enable`，随后轮询 `GET /api/v1/tasks/{task_id}`，状态流转为 `PENDING → RUNNING → SUCCEEDED / FAILED`。轮询按耗时退避（2.5s → 5s → 9s），图片 / 视频两条通道各自独立、可并行。
+- **任务持久化**：进行中的任务会连同提示词等元信息写入 localStorage，应用刷新后自动恢复跟踪，完成后直接写入作品库并弹出通知；进度环为基于耗时的渐近估算，封顶 94%，只有轮询到 `SUCCEEDED` 才视为完成。
 - **多页保活**：四个页面保持挂载，切换时只隐藏，避免丢失提示词与正在轮询的任务状态。
 - **参数适配**：模型尺寸、清晰度档位、时长与提示词长度上限均按官方文档在 `src/lib/models.ts` 中声明，界面随模型自动收敛到合法值。
 - **下载**：Rust 端以 `response.bytes()` 读取后写入系统下载目录，自动处理重名与扩展名。
